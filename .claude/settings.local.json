@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --input-type=module --eval \"import\\('./src/WPSValidationEngine.jsx'\\)\")",
+      "Bash(npx --yes acorn --ecma2020 --module src/WPSValidationEngine.jsx)",
+      "Bash(node -e ' *)",
+      "Bash(npx vite *)",
+      "Bash(npm run *)",
+      "Bash(pkill -f \"vite --host\")",
+      "Bash(npx tsc *)",
+      "Bash(npm install *)",
+      "Bash(npm ls *)",
+      "Bash(node scripts/gen-icons.mjs)",
+      "Bash(xargs -I{} basename {})",
+      "Bash(lsof -ti:5173)",
+      "Bash(xargs kill *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(gh auth *)",
+      "Bash(npm --version)",
+      "Bash(brew install *)",
+      "Bash(sudo npm *)",
+      "Bash(git init *)",
+      "Bash(git config *)",
+      "Bash(git add *)"
+    ]
+  }
+}
