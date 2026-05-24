@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { D, inp } from "../theme";
 import { Tag, Label, StatusDot, SectionHeader, FieldRow, TabBar, Button } from "../components";
 import { WPS_DATA, PQR_DATA } from "../data";
@@ -31,10 +31,24 @@ const emptyForm = (): Omit<WPS, "id"> => ({
 export const WPSModule: React.FC = () => {
   const [sel,      setSel]     = useState<WPS | null>(null);
   const [tab,      setTab]     = useState("wps");
-  const [wpsList,  setWpsList] = useState<WPS[]>(WPS_DATA);
+  const [wpsList,  setWpsList] = useState<WPS[]>(() => {
+    try {
+      const stored: WPS[] = JSON.parse(localStorage.getItem("wqms_wps_main_register") || "[]");
+      const ids = new Set(stored.map(w => w.id));
+      return [...stored, ...WPS_DATA.filter(w => !ids.has(w.id))];
+    } catch { return WPS_DATA; }
+  });
   const [creating, setCreating] = useState(false);
   const [form,     setForm]    = useState(emptyForm());
   const [success,  setSuccess] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored: WPS[] = JSON.parse(localStorage.getItem("wqms_wps_main_register") || "[]");
+      const ids = new Set(stored.map(w => w.id));
+      setWpsList([...stored, ...WPS_DATA.filter(w => !ids.has(w.id))]);
+    } catch {}
+  }, []);
 
   const set = (k: keyof Omit<WPS, "id" | "processes" | "materialGroups" | "positions">) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -55,7 +69,15 @@ export const WPSModule: React.FC = () => {
       ...form,
       materialGroups: form.materialGroups.length ? form.materialGroups : ["—"],
     };
-    setWpsList(prev => [...prev, newWPS]);
+    setWpsList(prev => {
+      const updated = [...prev, newWPS];
+      try {
+        const stored: WPS[] = JSON.parse(localStorage.getItem("wqms_wps_main_register") || "[]");
+        stored.push(newWPS);
+        localStorage.setItem("wqms_wps_main_register", JSON.stringify(stored));
+      } catch {}
+      return updated;
+    });
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false);
@@ -280,7 +302,13 @@ export const WPSModule: React.FC = () => {
                 ))}</tr>
               </thead>
               <tbody>
-                {PQR_DATA.map((p, i) => (
+                {((): typeof PQR_DATA => {
+                  try {
+                    const stored = JSON.parse(localStorage.getItem("wqms_pqr_main_register") || "[]");
+                    const ids = new Set(stored.map((p: {id:string}) => p.id));
+                    return [...stored, ...PQR_DATA.filter(p => !ids.has(p.id))];
+                  } catch { return PQR_DATA; }
+                })().map((p, i) => (
                   <tr key={p.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                     <td style={{ padding: "10px 12px", color: D.accent, fontFamily: "'DM Mono',monospace", fontWeight: 700, fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.id}</td>
                     <td style={{ padding: "10px 12px", color: "#6ea4f0", fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.wpsRef}</td>

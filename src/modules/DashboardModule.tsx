@@ -3,6 +3,7 @@ import { D } from "../theme";
 import { Card, Tag, StatusDot, StatCard, Progress } from "../components";
 import { PROJECTS, ALERTS, VT_REPORTS, NCR_DATA, WELDER_DATA, READINESS_CHECKS, MDR_PACKAGES } from "../data";
 import { PROJ_SM, MDR_SM } from "../statusMeta";
+import { ComplianceDashboardWidget } from "./ComplianceModule";
 
 interface DashboardModuleProps {
   setActive: (id: string) => void;
@@ -44,9 +45,9 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ setActive }) =
 
       {/* Stat cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 16 }}>
-        <StatCard label="Total Welds"    value={totalW}                sub={`${complW} complete`}                         color={D.blue} icon="⚡" onClick={() => setActive("traceability")} />
+        <StatCard label="Total Welds"    value={totalW}                sub={`${complW} complete`}                         color={D.blue} icon="⚡" onClick={() => setActive("weldregister")} />
         <StatCard label="Repair Rate"    value={`${repairRate}%`}       sub={`${rejW} rejected`}                          color={parseFloat(repairRate) > 5 ? D.fail : D.pass} icon="🔄" onClick={() => setActive("ncr")} />
-        <StatCard label="VT Pass Rate"   value={`${Math.round((vtPass / vtTotal) * 100)}%`} sub={`${vtPass}/${vtTotal}`} color={D.pass} icon="🔍" onClick={() => setActive("vt")} />
+        <StatCard label="VT Pass Rate"   value={`${Math.round((vtPass / vtTotal) * 100)}%`} sub={`${vtPass}/${vtTotal}`} color={D.pass} icon="🔍" onClick={() => setActive("inspection")} />
         <StatCard label="Open NCRs"      value={openNcr}               sub={critNcr > 0 ? `${critNcr} critical` : "None critical"} color={openNcr > 2 ? D.fail : D.warn} icon="⚠️" onClick={() => setActive("ncr")} />
         <StatCard label="Quals Expiring" value={expW}                  sub="Need action"                                 color={expW > 0 ? D.warn : D.pass} icon="👷" onClick={() => setActive("welders")} />
       </div>
@@ -59,7 +60,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ setActive }) =
             <button onClick={() => setActive("projects")} style={{ background: "none", border: `1px solid ${D.border}`, color: D.textMid, padding: "4px 10px", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>All →</button>
           </div>
           {PROJECTS.map(p => (
-            <div key={p.id} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: `1px solid ${D.borderSoft}` }}>
+            <div key={p.id} onClick={() => setActive("projects")} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: `1px solid ${D.borderSoft}`, cursor: "pointer" }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                 <div>
                   <div style={{ color: D.text, fontWeight: 600, fontSize: 13 }}>{p.name}</div>
@@ -95,7 +96,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ setActive }) =
           {/* Quick actions */}
           <Card s={{ padding: 18, flex: 1 }}>
             <div style={{ color: D.text, fontWeight: 700, fontSize: 14, fontFamily: "'Inter',sans-serif", marginBottom: 12 }}>Quick Actions</div>
-            {([ ["📘","Weld Passport","passport"], ["✔️","Readiness Checker","readiness"], ["🗺️","Weld Maps","weldmap"], ["📦","MDR Builder","mdr"], ["🔍","VT Inspection","vt"], ["⚠️","Raise NCR","ncr"] ] as const).map(([ic, label, target]) => (
+            {([ ["📘","Weld Passport","weldregister"], ["🗺️","Weld Maps","weldregister"], ["🔍","VT Inspection","inspection"], ["⚠️","Raise NCR","ncr"], ["📊","Compliance","compliance"], ["📦","MDR Builder","reports"] ] as const).map(([ic, label, target]) => (
               <button key={label} onClick={() => setActive(target)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", marginBottom: 5, background: D.surfaceAlt, border: `1px solid ${D.border}`, borderRadius: 7, cursor: "pointer", color: D.textMid, fontFamily: "'Inter',sans-serif", fontSize: 12, textAlign: "left" }}>
                 <span style={{ fontSize: 15 }}>{ic}</span>
                 <span style={{ fontWeight: 600, color: D.text, flex: 1 }}>{label}</span>
@@ -106,9 +107,12 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ setActive }) =
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+      {/* Compliance widget + NDT + Readiness */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <ComplianceDashboardWidget setActive={setActive} />
+
         {/* NDT summary */}
-        <Card s={{ padding: 18 }}>
+        <Card onClick={() => setActive("inspection")} s={{ padding: 18, cursor: "pointer" }}>
           <div style={{ color: D.text, fontWeight: 700, fontSize: 14, fontFamily: "'Inter',sans-serif", marginBottom: 12 }}>NDT Summary</div>
           {([["VT", vtPass, vtTotal, D.pass], ["MT", 18, 20, D.blue], ["UT", 12, 14, D.blue], ["RT", 8, 10, D.warn], ["PT", 6, 6, D.pass]] as const).map(([m, p, t, c]) => (
             <div key={m} style={{ marginBottom: 7 }}>
@@ -143,7 +147,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ setActive }) =
         </Card>
 
         {/* MDR status */}
-        <Card s={{ padding: 18 }}>
+        <Card onClick={() => setActive("reports")} s={{ padding: 18, cursor: "pointer" }}>
           <div style={{ color: D.text, fontWeight: 700, fontSize: 14, fontFamily: "'Inter',sans-serif", marginBottom: 12 }}>MDR Status</div>
           {MDR_PACKAGES.map(pkg => (
             <div key={pkg.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid ${D.borderSoft}` }}>
@@ -159,7 +163,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({ setActive }) =
               {pkg.missing.length > 0 && <div style={{ color: D.fail, fontSize: 10, marginTop: 3 }}>⚠ {pkg.missing.length} missing</div>}
             </div>
           ))}
-          <button onClick={() => setActive("mdr")} style={{ width: "100%", padding: "8px", background: D.accentFaint, border: `1px solid ${D.accentBorder}`, borderRadius: 6, cursor: "pointer", color: D.accent, fontWeight: 600, fontSize: 12, fontFamily: "'Inter',sans-serif" }}>Open MDR Builder →</button>
+          <button onClick={() => setActive("reports")} style={{ width: "100%", padding: "8px", background: D.accentFaint, border: `1px solid ${D.accentBorder}`, borderRadius: 6, cursor: "pointer", color: D.accent, fontWeight: 600, fontSize: 12, fontFamily: "'Inter',sans-serif" }}>Open MDR Builder →</button>
         </Card>
       </div>
     </div>

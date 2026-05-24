@@ -1,5 +1,5 @@
-import React, { createContext, useContext } from "react";
-import { usePersistedState } from "./hooks/usePersistedState";
+import React, { createContext, useContext, useState, useEffect } from "react";
+import * as db from "./lib/db";
 import {
   WPS_DATA, PQR_DATA, WELDER_DATA, PROJECTS, NCR_DATA, VT_REPORTS,
   MAT_RAW, MAT_CONS, NDT_DATA, HT_DATA, ITP_DATA,
@@ -11,7 +11,7 @@ import type {
   ITP, WeldPassport, WeldMapNode, MDRPackage,
 } from "./types";
 
-// ── API Key ───────────────────────────────────────────────────────────────────
+// ── API key (kept for backwards compat with SetupScreen) ──────────────────────
 const APIKEY_KEY = "wqms_api_key";
 export function getStoredApiKey(): string { return localStorage.getItem(APIKEY_KEY) ?? ""; }
 export function storeApiKey(key: string)  { localStorage.setItem(APIKEY_KEY, key); }
@@ -20,6 +20,7 @@ export function storeApiKey(key: string)  { localStorage.setItem(APIKEY_KEY, key
 interface Store {
   apiKey:        string;
   setApiKey:     (k: string) => void;
+  loading:       boolean;
 
   wpsData:       WPS[];
   setWpsData:    (v: WPS[] | ((p: WPS[]) => WPS[])) => void;
@@ -62,32 +63,87 @@ interface Store {
 
   mdrPackages:   MDRPackage[];
   setMdrPackages:(v: MDRPackage[] | ((p: MDRPackage[]) => MDRPackage[])) => void;
+
+  /** Reload everything from Supabase (call after mutations) */
+  refresh:       () => Promise<void>;
 }
 
 const Ctx = createContext<Store | null>(null);
 
 export function DataProvider({ children }: { children: React.ReactNode }) {
-  const [apiKey,       setApiKeyRaw]    = usePersistedState<string>(APIKEY_KEY, "");
-  const setApiKey = (k: string) => { setApiKeyRaw(k); };
+  const [apiKey,      setApiKeyState] = useState(() => getStoredApiKey());
+  const [loading,     setLoading]     = useState(true);
 
-  const [wpsData,      setWpsData]      = usePersistedState<WPS[]>("wqms_wps",         WPS_DATA);
-  const [pqrData,      setPqrData]      = usePersistedState<PQR[]>("wqms_pqr",         PQR_DATA);
-  const [welderData,   setWelderData]   = usePersistedState<Welder[]>("wqms_welders",   WELDER_DATA);
-  const [projects,     setProjects]     = usePersistedState<Project[]>("wqms_projects", PROJECTS);
-  const [ncrData,      setNcrData]      = usePersistedState<NCR[]>("wqms_ncr",         NCR_DATA);
-  const [vtReports,    setVtReports]    = usePersistedState<VTReport[]>("wqms_vt",      VT_REPORTS);
-  const [matRaw,       setMatRaw]       = usePersistedState<RawMaterial[]>("wqms_matraw",  MAT_RAW);
-  const [matCons,      setMatCons]      = usePersistedState<Consumable[]>("wqms_matcons",  MAT_CONS);
-  const [ndtData,      setNdtData]      = usePersistedState<NDTRecord[]>("wqms_ndt",    NDT_DATA);
-  const [htData,       setHtData]       = usePersistedState<HeatTreatment[]>("wqms_ht", HT_DATA);
-  const [itpData,      setItpData]      = usePersistedState<ITP[]>("wqms_itp",         ITP_DATA);
-  const [passports,    setPassports]    = usePersistedState<WeldPassport[]>("wqms_passports", WELD_PASSPORTS);
-  const [mapNodes,     setMapNodes]     = usePersistedState<WeldMapNode[]>("wqms_mapnodes",   WELD_MAP_NODES);
-  const [mdrPackages,  setMdrPackages]  = usePersistedState<MDRPackage[]>("wqms_mdr",   MDR_PACKAGES);
+  const [wpsData,     setWpsData]     = useState<WPS[]>(WPS_DATA);
+  const [pqrData,     setPqrData]     = useState<PQR[]>(PQR_DATA);
+  const [welderData,  setWelderData]  = useState<Welder[]>(WELDER_DATA);
+  const [projects,    setProjects]    = useState<Project[]>(PROJECTS);
+  const [ncrData,     setNcrData]     = useState<NCR[]>(NCR_DATA);
+  const [vtReports,   setVtReports]   = useState<VTReport[]>(VT_REPORTS);
+  const [matRaw,      setMatRaw]      = useState<RawMaterial[]>(MAT_RAW);
+  const [matCons,     setMatCons]     = useState<Consumable[]>(MAT_CONS);
+  const [ndtData,     setNdtData]     = useState<NDTRecord[]>(NDT_DATA);
+  const [htData,      setHtData]      = useState<HeatTreatment[]>(HT_DATA);
+  const [itpData,     setItpData]     = useState<ITP[]>(ITP_DATA);
+  const [passports,   setPassports]   = useState<WeldPassport[]>(WELD_PASSPORTS);
+  const [mapNodes,    setMapNodes]    = useState<WeldMapNode[]>(WELD_MAP_NODES);
+  const [mdrPackages, setMdrPackages] = useState<MDRPackage[]>(MDR_PACKAGES);
+
+  const setApiKey = (k: string) => {
+    setApiKeyState(k);
+    localStorage.setItem(APIKEY_KEY, k);
+  };
+
+  const loadFromSupabase = async () => {
+    setLoading(true);
+    try {
+      const [
+        proj, wps, pqr, welders, ncrs, vt,
+        mats, cons, ndt, ht, itp,
+        pass, nodes, mdr,
+      ] = await Promise.all([
+        db.getProjects(),
+        db.getWPSList(),
+        db.getPQRList(),
+        db.getWelders(),
+        db.getNCRs(),
+        db.getVTReports(),
+        db.getMaterials(),
+        db.getConsumables(),
+        db.getNDTRecords(),
+        db.getHeatTreatments(),
+        db.getITPs(),
+        db.getWeldPassports(),
+        db.getWeldMapNodes(),
+        db.getMDRPackages(),
+      ]);
+
+      setProjects(proj);
+      setWpsData(wps);
+      setPqrData(pqr);
+      setWelderData(welders);
+      setNcrData(ncrs);
+      setVtReports(vt);
+      setMatRaw(mats);
+      setMatCons(cons);
+      setNdtData(ndt);
+      setHtData(ht);
+      setItpData(itp);
+      setPassports(pass);
+      setMapNodes(nodes);
+      setMdrPackages(mdr);
+    } catch (e) {
+      console.warn("[WQMS] Supabase load failed, using static data:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadFromSupabase(); }, []);
 
   return (
     <Ctx.Provider value={{
-      apiKey, setApiKey,
+      apiKey, setApiKey, loading,
       wpsData, setWpsData, pqrData, setPqrData,
       welderData, setWelderData, projects, setProjects,
       ncrData, setNcrData, vtReports, setVtReports,
@@ -95,6 +151,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       ndtData, setNdtData, htData, setHtData,
       itpData, setItpData, passports, setPassports,
       mapNodes, setMapNodes, mdrPackages, setMdrPackages,
+      refresh: loadFromSupabase,
     }}>
       {children}
     </Ctx.Provider>

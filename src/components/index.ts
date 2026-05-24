@@ -10,3 +10,4 @@ export { Button }         from "./Button";
 export { StatCard }       from "./StatCard";
 export { TH, TD }         from "./TableCell";
 export { SimpleTable }    from "./SimpleTable";
+export { WQLogo }         from "./WQLogo";

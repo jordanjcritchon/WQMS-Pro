@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { D, inp } from "../theme";
 import { Card, Label, Tag, StatusDot, Progress, TabBar, Button } from "../components";
 import { MDR_PACKAGES, PROJECTS, NCR_DATA, WELD_PASSPORTS, WPS_DATA, WELDER_DATA, MAT_RAW, NDT_DATA, HT_DATA, VT_REPORTS, ITP_DATA } from "../data";
@@ -37,311 +37,670 @@ interface MDRDocumentProps {
   onClose:   () => void;
 }
 
-const MDRDocument: React.FC<MDRDocumentProps> = ({ pkg, projectId, onClose }) => {
-  const project  = PROJECTS.find(p => p.id === projectId);
-  const passports = WELD_PASSPORTS.filter(w => w.projectId === projectId);
-  const ncrs     = NCR_DATA.filter(n => project && n.project.includes(project.name.split("–")[0].trim()));
-  const vtReps   = VT_REPORTS.filter(r => project && r.project.includes(project.name.split("–")[0].trim()));
-  const htRecs   = HT_DATA.filter(h => h.jobId === projectId);
-  const ndtRecs  = NDT_DATA.filter(n => passports.some(p => p.id === n.weldId));
-  const welder   = WELDER_DATA;
-  const itp      = ITP_DATA.filter(i => i.projectId === projectId);
-  const today    = new Date().toLocaleDateString("en-AU", { day: "2-digit", month: "long", year: "numeric" });
+// Shared print-safe style constants
+const C = {
+  navy:     "#1a3557",
+  navyDk:   "#122440",
+  blue:     "#1d4ed8",
+  blueLight:"#dbeafe",
+  pass:     "#15803d",
+  passBg:   "#dcfce7",
+  passBd:   "#86efac",
+  fail:     "#b91c1c",
+  failBg:   "#fee2e2",
+  failBd:   "#fca5a5",
+  warn:     "#92400e",
+  warnBg:   "#fef3c7",
+  warnBd:   "#fcd34d",
+  rowAlt:   "#f0f5fb",
+  border:   "#c8d4e3",
+  text:     "#1a1a2e",
+  textSoft: "#4b5563",
+  mono:     "'Courier New', monospace",
+};
 
-  const doc: React.CSSProperties = {
-    background:  "#ffffff",
-    color:       "#111111",
-    fontFamily:  "'Inter', sans-serif",
-    width:       "210mm",
-    minHeight:   "297mm",
-    margin:      "20px auto",
-    padding:     "18mm 20mm",
-    boxShadow:   "0 20px 60px rgba(0,0,0,0.6)",
-    fontSize:    11,
-    lineHeight:  1.5,
+const StatusBadge: React.FC<{ v: string; pass?: string[]; fail?: string[]; warn?: string[] }> = ({ v, pass = ["PASS","Pass","Accepted","Current","Uploaded","Active"], fail = ["FAIL","Fail","Expired","Lapsed","Missing"], warn = ["PENDING","Pending","Conditional","Expiring Soon","CONDITIONAL"] }) => {
+  const up = String(v).trim();
+  const isPass = pass.some(p => up === p);
+  const isFail = fail.some(f => up === f);
+  const isWarn = warn.some(w => up === w);
+  const bg   = isPass ? C.passBg  : isFail ? C.failBg  : isWarn ? C.warnBg  : "#f3f4f6";
+  const bd   = isPass ? C.passBd  : isFail ? C.failBd  : isWarn ? C.warnBd  : "#d1d5db";
+  const col  = isPass ? C.pass    : isFail ? C.fail     : isWarn ? C.warn    : C.textSoft;
+  return (
+    <span style={{ display:"inline-block", background:bg, border:`1px solid ${bd}`, color:col, fontWeight:700, fontSize:10, borderRadius:4, padding:"2px 7px", letterSpacing:"0.03em" }}>
+      {up}
+    </span>
+  );
+};
+
+const SH: React.FC<{ n: string; label: string }> = ({ n, label }) => (
+  <div style={{ display:"flex", alignItems:"center", gap:0, marginTop:28, marginBottom:12, breakBefore:"avoid", pageBreakBefore:"avoid" }}>
+    <div style={{ background:C.navy, color:"#fff", fontWeight:700, fontSize:11, padding:"6px 14px", borderRadius:"4px 0 0 4px", letterSpacing:"0.08em", whiteSpace:"nowrap" }}>{n}</div>
+    <div style={{ background:C.navyDk, color:"#cbd5e1", fontWeight:600, fontSize:11, padding:"6px 14px", flex:1, borderRadius:"0 4px 4px 0", letterSpacing:"0.03em" }}>{label}</div>
+  </div>
+);
+
+const TH_S: React.CSSProperties = { background:C.navy, color:"#ffffff", fontWeight:600, fontSize:10, padding:"7px 9px", textAlign:"left", border:`1px solid ${C.navyDk}`, whiteSpace:"nowrap", letterSpacing:"0.03em" };
+const TD_S = (alt: boolean): React.CSSProperties => ({ padding:"6px 9px", border:`1px solid ${C.border}`, color:C.text, verticalAlign:"top", fontSize:10.5, background: alt ? C.rowAlt : "#ffffff" });
+const TBL: React.CSSProperties = { width:"100%", borderCollapse:"collapse", marginBottom:16, fontSize:10.5, breakInside:"avoid" };
+
+const PRINT_CSS = `
+  @media print {
+    html, body { background: #ffffff !important; margin: 0 !important; padding: 0 !important; }
+    .mdr-overlay { position: static !important; background: #ffffff !important; box-shadow: none !important; overflow: visible !important; }
+    .mdr-toolbar { display: none !important; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+    @page { size: A4 portrait; margin: 12mm 15mm; }
+    .page-break { page-break-before: always; break-before: page; }
+  }
+`;
+
+interface SigPadProps { label: string; onDone: (d: string) => void; onCancel: () => void; }
+const SigPad: React.FC<SigPadProps> = ({ label, onDone, onCancel }) => {
+  const ref  = useRef<HTMLCanvasElement>(null);
+  const down = useRef(false);
+
+  const pos = (e: React.MouseEvent | React.TouchEvent) => {
+    const r = ref.current!.getBoundingClientRect();
+    const t = "touches" in e ? e.touches[0] : e as React.MouseEvent;
+    return { x: t.clientX - r.left, y: t.clientY - r.top };
   };
-
-  const h1: React.CSSProperties = { fontSize: 20, fontWeight: 700, color: "#111", marginBottom: 4, letterSpacing: "-0.02em" };
-  const h2: React.CSSProperties = { fontSize: 14, fontWeight: 700, color: "#111", marginTop: 24, marginBottom: 8, paddingBottom: 5, borderBottom: "2px solid #6366f1" };
-  const h3: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#333", marginTop: 14, marginBottom: 6 };
-  const tbl: React.CSSProperties = { width: "100%", borderCollapse: "collapse", marginBottom: 14, fontSize: 11 };
-  const th: React.CSSProperties  = { background: "#f4f4f8", color: "#444", fontWeight: 600, padding: "6px 8px", textAlign: "left", border: "1px solid #ddd" };
-  const td: React.CSSProperties  = { padding: "5px 8px", border: "1px solid #e0e0e8", color: "#222", verticalAlign: "top" };
+  const begin = (e: React.MouseEvent | React.TouchEvent) => {
+    down.current = true;
+    const ctx = ref.current!.getContext("2d")!;
+    const { x, y } = pos(e);
+    ctx.beginPath(); ctx.moveTo(x, y);
+  };
+  const draw = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!down.current) return;
+    e.preventDefault();
+    const ctx = ref.current!.getContext("2d")!;
+    ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    const { x, y } = pos(e);
+    ctx.lineTo(x, y); ctx.stroke();
+  };
+  const end = () => { down.current = false; };
+  const clear = () => { const c = ref.current; if (!c) return; c.width = c.width; };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.85)", overflowY: "auto", display: "flex", flexDirection: "column" }}>
+    <div style={{ position:"fixed", inset:0, zIndex:20000, background:"rgba(0,0,0,0.65)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ background:"#fff", borderRadius:12, padding:24, width:440, boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ color:C.navy, fontWeight:800, fontSize:15, marginBottom:4 }}>Signature — {label}</div>
+        <div style={{ color:C.textSoft, fontSize:11, marginBottom:14 }}>Draw your signature below using mouse or touch.</div>
+        <canvas ref={ref} width={392} height={160}
+          style={{ border:`2px solid ${C.border}`, borderRadius:6, background:"#fafbfd", cursor:"crosshair", display:"block", touchAction:"none", width:"100%" }}
+          onMouseDown={begin} onMouseMove={draw} onMouseUp={end} onMouseLeave={end}
+          onTouchStart={begin} onTouchMove={draw} onTouchEnd={end}
+        />
+        <div style={{ display:"flex", gap:8, marginTop:14, justifyContent:"flex-end" }}>
+          <button onClick={clear} style={{ background:"none", border:`1px solid ${C.border}`, color:C.textSoft, padding:"8px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Clear</button>
+          <button onClick={onCancel} style={{ background:"none", border:`1px solid ${C.border}`, color:C.textSoft, padding:"8px 16px", borderRadius:6, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>Cancel</button>
+          <button onClick={() => onDone(ref.current!.toDataURL("image/png"))} style={{ background:C.navy, color:"#fff", border:"none", padding:"8px 22px", borderRadius:6, cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:"inherit" }}>Confirm ✓</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MDRDocument: React.FC<MDRDocumentProps> = ({ pkg, projectId, onClose }) => {
+  const project   = PROJECTS.find(p => p.id === projectId);
+  const passports = WELD_PASSPORTS.filter(w => w.projectId === projectId);
+  const ncrs      = NCR_DATA.filter(n => project && n.project.includes(project.name.split("–")[0].trim()));
+  const vtReps    = VT_REPORTS.filter(r => project && r.project.includes(project.name.split("–")[0].trim()));
+  const htRecs    = HT_DATA.filter(h => h.jobId === projectId);
+  const ndtRecs   = NDT_DATA.filter(n => passports.some(p => p.id === n.weldId));
+  const itp       = ITP_DATA.filter(i => i.projectId === projectId);
+  const today     = new Date().toLocaleDateString("en-AU", { day:"2-digit", month:"long", year:"numeric" });
+  const docRef    = `${pkg.id}-Rev${pkg.rev}`;
+  const SIG_KEY   = `wqms_mdr_sig_${docRef}`;
+
+  const [sigs, setSigs]         = useState<Record<string,string>>(() => { try { return JSON.parse(localStorage.getItem(SIG_KEY) || "{}"); } catch { return {}; } });
+  const [sigModal, setSigModal] = useState<string|null>(null);
+  const FIELDS_KEY = `${SIG_KEY}_fields`;
+  const [fields, setFields]     = useState<Record<string,string>>(() => { try { return JSON.parse(localStorage.getItem(FIELDS_KEY) || "{}"); } catch { return {}; } });
+
+  const saveSig = (field: string, data: string) => {
+    setSigs(prev => {
+      const next = { ...prev, [field]: data };
+      try { localStorage.setItem(SIG_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setSigModal(null);
+  };
+
+  const saveField = (key: string, val: string) => {
+    setFields(prev => {
+      const next = { ...prev, [key]: val };
+      try { localStorage.setItem(FIELDS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const editCell = (fieldKey: string, placeholder: string, defaultVal = "") => (
+    <input
+      value={fields[fieldKey] ?? defaultVal}
+      onChange={e => saveField(fieldKey, e.target.value)}
+      placeholder={placeholder}
+      style={{ border:"none", borderBottom:`1px dashed ${C.border}`, background:"transparent", color:C.text, fontSize:10.5, fontFamily:"inherit", width:"100%", padding:"2px 2px", outline:"none" }}
+    />
+  );
+
+  const PageFooter = () => (
+    <div style={{ borderTop:`1px solid ${C.border}`, marginTop:20, paddingTop:7, display:"flex", justifyContent:"space-between", fontSize:9, color:C.textSoft }}>
+      <span style={{ fontWeight:600 }}>WQMS Pro · {docRef}</span>
+      <span>{pkg.title}</span>
+      <span>CONTROLLED DOCUMENT — {today}</span>
+    </div>
+  );
+
+  const handlePrint = () => {
+    const el = document.getElementById("mdr-print-content");
+    if (!el) return;
+    const clone = el.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll("input").forEach(inp => {
+      const span = document.createElement("span");
+      span.textContent = inp.value || inp.placeholder || "";
+      span.style.cssText = inp.style.cssText;
+      inp.parentNode?.replaceChild(span, inp);
+    });
+    clone.querySelectorAll("button").forEach(btn => {
+      const span = document.createElement("span");
+      span.textContent = btn.textContent?.includes("Sign") ? "[Pending signature]" : btn.textContent || "";
+      span.style.color = "#9ca3af"; span.style.fontSize = "9px";
+      btn.parentNode?.replaceChild(span, btn);
+    });
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${pkg.title}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
+    body{margin:0;padding:0;background:#fff;font-family:'Inter','Helvetica Neue',Arial,sans-serif;font-size:10.5px;line-height:1.55;color:#1a1a2e}
+    .page-break{page-break-before:always!important;break-before:page!important}
+    @page{size:A4 portrait;margin:12mm 15mm}
+  </style>
+</head>
+<body>${clone.innerHTML}</body>
+</html>`);
+    w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 600);
+  };
+
+  return (
+    <div className="mdr-overlay" style={{ position:"fixed", inset:0, zIndex:9999, background:"#12121f", overflowY:"auto" }}>
+      <style>{PRINT_CSS}</style>
+
+      {/* Signature pad modal */}
+      {sigModal && (
+        <SigPad
+          label={sigModal === "prep" ? "Prepared By" : sigModal === "review" ? "Reviewed By" : "Client Acceptance"}
+          onDone={data => saveSig(sigModal, data)}
+          onCancel={() => setSigModal(null)}
+        />
+      )}
+
       {/* Toolbar */}
-      <div className="no-print" style={{ position: "sticky", top: 0, background: D.surface, borderBottom: `1px solid ${D.border}`, padding: "10px 20px", display: "flex", gap: 10, alignItems: "center", zIndex: 10000, flexShrink: 0 }}>
-        <span style={{ color: D.text, fontWeight: 600, fontSize: 14, flex: 1 }}>{pkg.title} – Compiled MDR Document</span>
-        <Button color={D.pass} onClick={() => window.print()}>Export PDF</Button>
-        <Button outline onClick={onClose}>Close</Button>
+      <div className="mdr-toolbar no-print" style={{ position:"sticky", top:0, background:D.surface, borderBottom:`1px solid ${D.border}`, padding:"10px 20px", display:"flex", gap:10, alignItems:"center", zIndex:10000 }}>
+        <span style={{ color:D.text, fontWeight:600, fontSize:14, flex:1 }}>{pkg.title}</span>
+        <Button color={D.blue} onClick={handlePrint}>⬇ Export PDF</Button>
+        <Button outline onClick={onClose}>✕ Close</Button>
       </div>
 
-      {/* Document */}
-      <div style={doc}>
-        {/* Cover */}
-        <div style={{ textAlign: "center", paddingBottom: 24, marginBottom: 24, borderBottom: "3px solid #6366f1" }}>
-          <div style={{ fontSize: 10, color: "#6366f1", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12 }}>Manufacturing Data Record</div>
-          <div style={h1}>{pkg.title}</div>
-          <div style={{ fontSize: 14, color: "#444", marginTop: 6 }}>{project?.name}</div>
-          <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Client: {project?.client ?? pkg.client}</div>
-          <div style={{ display: "flex", justifyContent: "center", gap: 32, marginTop: 16, fontSize: 11, color: "#555" }}>
-            <div><strong>Package Ref:</strong> {pkg.id}</div>
-            <div><strong>Revision:</strong> {pkg.rev}</div>
-            <div><strong>Issue Date:</strong> {today}</div>
-            <div><strong>Standard:</strong> {project?.standard}</div>
+      {/* Document centering wrapper */}
+      <div style={{ display:"flex", justifyContent:"center", padding:"28px 16px 56px" }}>
+
+      {/* A4 Document */}
+      <div id="mdr-print-content" style={{ background:"#ffffff", color:C.text, fontFamily:"'Inter','Helvetica Neue',Arial,sans-serif", width:"210mm", padding:"0", boxShadow:"0 8px 48px rgba(0,0,0,0.6)", fontSize:10.5, lineHeight:1.55 }}>
+
+        {/* ── COVER PAGE ── */}
+        <div style={{ background:C.navy, padding:"28px 28px 22px", display:"flex", flexDirection:"column", gap:0 }}>
+          {/* Header band */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:28 }}>
+            <div>
+              <div style={{ color:"#93c5fd", fontSize:9, fontWeight:700, letterSpacing:"0.18em", textTransform:"uppercase", marginBottom:6 }}>Manufacturing Data Record</div>
+              <div style={{ color:"#ffffff", fontSize:26, fontWeight:800, letterSpacing:"-0.03em", lineHeight:1.1, maxWidth:380 }}>{pkg.title}</div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ background:"#ffffff", color:C.navy, fontWeight:800, fontSize:16, padding:"8px 16px", borderRadius:6, letterSpacing:"-0.02em", marginBottom:6 }}>WQMS Pro</div>
+              <div style={{ color:"#93c5fd", fontSize:9, fontWeight:700, letterSpacing:"0.12em" }}>WELDING QUALITY MANAGEMENT</div>
+            </div>
+          </div>
+
+          {/* Cover detail table */}
+          <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:8, padding:"16px 18px", display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"12px 24px" }}>
+            {([
+              ["Package Reference", docRef],
+              ["Project",           project?.name ?? "—"],
+              ["Client",            project?.client ?? pkg.client],
+              ["Standard",          project?.standard ?? "—"],
+              ["Revision",          pkg.rev],
+              ["Issue Date",        today],
+              ["Prepared By",       pkg.createdBy],
+              ["Document Status",   pkg.status],
+              ["Completeness",      `${pkg.completeness}%`],
+            ] as const).map(([k, v]) => (
+              <div key={k}>
+                <div style={{ color:"#93c5fd", fontSize:8.5, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:2 }}>{k}</div>
+                <div style={{ color:"#ffffff", fontSize:11, fontWeight:600 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Standards strip */}
+          <div style={{ display:"flex", gap:8, marginTop:18, flexWrap:"wrap" }}>
+            {["ISO 3834","AS 3992","ASME IX","AS 4041","ISO 9606"].map(s => (
+              <span key={s} style={{ background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.2)", color:"#e0e7ff", fontSize:9.5, fontWeight:600, borderRadius:4, padding:"3px 9px", letterSpacing:"0.06em" }}>{s}</span>
+            ))}
+            <span style={{ marginLeft:"auto", color:"rgba(255,255,255,0.45)", fontSize:9, alignSelf:"center" }}>CONFIDENTIAL — For authorised recipients only</span>
           </div>
         </div>
 
-        {/* Table of Contents */}
-        <div style={h2}>Table of Contents</div>
-        {ALL_SECTIONS.filter(s => pkg.sections.includes(s.id)).map((s, i) => (
-          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px dotted #ccc", fontSize: 11 }}>
-            <span>{i + 1}. {s.label}</span>
-            <span style={{ color: "#888" }}>{i + 2}</span>
-          </div>
-        ))}
+        {/* Document body */}
+        <div style={{ padding:"22px 28px" }}>
 
-        {/* Project Summary */}
-        <div style={h2}>1. Project Summary</div>
-        {project && (
-          <table style={tbl}>
+          {/* Revision History */}
+          <SH n="REV" label="Document Revision History" />
+          <table style={TBL}>
+            <thead><tr>{["Rev","Date","Description","Prepared By","Approved By"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
             <tbody>
-              {[["Project ID", project.id],["Project Name", project.name],["Client", project.client],["Standard", project.standard],["Due Date", project.due],["Total Welds", project.welds.total],["Completed", project.welds.complete],["Pending", project.welds.pending],["Rejected", project.welds.rejected],["Progress", `${project.progress}%`]].map(([k, v]) => (
-                <tr key={k as string}><td style={{ ...td, width: 180, fontWeight: 600, background: "#f9f9fc" }}>{k}</td><td style={td}>{v}</td></tr>
+              <tr>
+                <td style={TD_S(false)}>{pkg.rev}</td>
+                <td style={TD_S(false)}>{today}</td>
+                <td style={TD_S(false)}>Initial issue — compiled from WQMS Pro live data</td>
+                <td style={TD_S(false)}>{pkg.createdBy}</td>
+                <td style={TD_S(false)}>—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* Table of Contents */}
+          <SH n="TOC" label="Table of Contents" />
+          <table style={{ ...TBL, marginBottom:0 }}>
+            <tbody>
+              {ALL_SECTIONS.filter(s => pkg.sections.includes(s.id)).map((s, i) => (
+                <tr key={s.id} style={{ background: i % 2 === 0 ? C.rowAlt : "#ffffff" }}>
+                  <td style={{ ...TD_S(false), width:36, textAlign:"center", fontWeight:700, color:C.navy, background: i % 2 === 0 ? C.rowAlt : "#ffffff" }}>{i + 1}</td>
+                  <td style={{ ...TD_S(false), background: i % 2 === 0 ? C.rowAlt : "#ffffff" }}>{s.label}</td>
+                  <td style={{ ...TD_S(false), width:60, textAlign:"right", color:C.textSoft, background: i % 2 === 0 ? C.rowAlt : "#ffffff" }}>p. {i + 3}</td>
+                </tr>
               ))}
             </tbody>
           </table>
-        )}
 
-        {/* Weld Register */}
-        {passports.length > 0 && (
-          <>
-            <div style={h2}>2. Weld Register</div>
-            <table style={tbl}>
-              <thead><tr>
-                {["Weld ID","Type","Process","Welder","WPS","VT","NDT","Final Status"].map(h => <th key={h} style={th}>{h}</th>)}
-              </tr></thead>
+          <PageFooter />
+
+          {/* ── SECTION 1: Project Summary ── */}
+          <div className="page-break" />
+          <SH n="01" label="Project Summary" />
+          {project && (
+            <table style={TBL}>
               <tbody>
-                {passports.map(w => (
-                  <tr key={w.id}>
-                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#6366f1" }}>{w.id}</td>
-                    <td style={td}>{w.weldType.split("–")[0].trim()}</td>
-                    <td style={td}>{w.process.split("–")[0].trim()}</td>
-                    <td style={td}>{w.welderName} ({w.stampNo})</td>
-                    <td style={{ ...td, fontFamily: "monospace" }}>{w.wpsId}</td>
-                    <td style={{ ...td, color: w.vtResult === "PASS" ? "#059669" : "#dc2626", fontWeight: 600 }}>{w.vtResult}</td>
-                    <td style={td}>{w.ndtResults.map(n => `${n.method}: ${n.result}`).join(", ") || "—"}</td>
-                    <td style={{ ...td, color: w.finalStatus === "Accepted" ? "#059669" : "#dc2626", fontWeight: 600 }}>{w.finalStatus}</td>
+                {([
+                  ["Project ID", project.id],
+                  ["Project Name", project.name],
+                  ["Client / End User", project.client],
+                  ["Applicable Standard", project.standard],
+                  ["Scheduled Completion", project.due],
+                  ["Total Welds", String(project.welds.total)],
+                  ["Welds Completed", String(project.welds.complete)],
+                  ["Welds Pending", String(project.welds.pending)],
+                  ["Welds Rejected / Repaired", String(project.welds.rejected)],
+                  ["Overall Progress", `${project.progress}%`],
+                  ["MDR Package", docRef],
+                  ["Issue Date", today],
+                ] as const).map(([k, v], i) => (
+                  <tr key={k}>
+                    <td style={{ ...TD_S(i%2===0), width:200, fontWeight:600, color:C.navy }}>{k}</td>
+                    <td style={TD_S(i%2===0)}>{v}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </>
-        )}
+          )}
+          <PageFooter />
 
-        {/* WPS Register */}
-        <div style={h2}>3. WPS Register</div>
-        <table style={tbl}>
-          <thead><tr>{["WPS No.","Rev","Title","Standard","Processes","Thickness","Status"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-          <tbody>
-            {WPS_DATA.map(w => (
-              <tr key={w.id}>
-                <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#6366f1" }}>{w.id}</td>
-                <td style={td}>{w.rev}</td>
-                <td style={td}>{w.title}</td>
-                <td style={td}>{w.standard}</td>
-                <td style={td}>{w.processes.join(", ")}</td>
-                <td style={td}>{w.thicknessRange}</td>
-                <td style={{ ...td, color: w.status === "Active" ? "#059669" : w.status === "Expired" ? "#dc2626" : "#d97706", fontWeight: 600 }}>{w.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          {/* ── SECTION 2: Weld Register ── */}
+          {passports.length > 0 && (
+            <>
+              <div className="page-break" />
+              <SH n="02" label="Weld Register" />
+              <table style={TBL}>
+                <thead><tr>{["Weld ID","Joint Type","Process","Welder / Stamp","WPS Ref","VT Result","NDT Summary","Final Status"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {passports.map((w, i) => (
+                    <tr key={w.id}>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.navy }}>{w.id}</td>
+                      <td style={TD_S(i%2===0)}>{w.weldType}</td>
+                      <td style={TD_S(i%2===0)}>{w.process}</td>
+                      <td style={TD_S(i%2===0)}>{w.welderName} ({w.stampNo})</td>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{w.wpsId}</td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={w.vtResult} /></td>
+                      <td style={{ ...TD_S(i%2===0), fontSize:9.5 }}>{w.ndtResults.map(n => `${n.method}: ${n.result}`).join(" · ") || "—"}</td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={w.finalStatus} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PageFooter />
+            </>
+          )}
 
-        {/* Welder Qualifications */}
-        <div style={h2}>4. Welder Qualifications</div>
-        <table style={tbl}>
-          <thead><tr>{["Welder","Stamp","Employer","Process","Standard","Expiry","Status"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-          <tbody>
-            {welder.flatMap(w => w.qualifications.map(q => (
-              <tr key={q.id}>
-                <td style={td}>{w.firstName} {w.lastName}</td>
-                <td style={{ ...td, fontFamily: "monospace" }}>{w.stampNo}</td>
-                <td style={td}>{w.employer}</td>
-                <td style={td}>{q.process}</td>
-                <td style={td}>{q.standard}</td>
-                <td style={td}>{q.expiryDate}</td>
-                <td style={{ ...td, color: q.continuityOk ? "#059669" : "#dc2626", fontWeight: 600 }}>{q.continuityOk ? "Current" : "Lapsed"}</td>
-              </tr>
-            )))}
-          </tbody>
-        </table>
+          {/* ── SECTION 3: WPS / PQR Register ── */}
+          <div className="page-break" />
+          <SH n="03" label="Welding Procedure Specification (WPS) Register" />
+          <table style={TBL}>
+            <thead><tr>{["WPS No.","Rev","Title","Standard","Process(es)","Thickness Range","Status"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+            <tbody>
+              {WPS_DATA.map((w, i) => (
+                <tr key={w.id}>
+                  <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.navy }}>{w.id}</td>
+                  <td style={{ ...TD_S(i%2===0), textAlign:"center" }}>{w.rev}</td>
+                  <td style={TD_S(i%2===0)}>{w.title}</td>
+                  <td style={TD_S(i%2===0)}>{w.standard}</td>
+                  <td style={TD_S(i%2===0)}>{w.processes.join(", ")}</td>
+                  <td style={TD_S(i%2===0)}>{w.thicknessRange}</td>
+                  <td style={TD_S(i%2===0)}><StatusBadge v={w.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <PageFooter />
 
-        {/* Material Traceability */}
-        <div style={h2}>5. Material Traceability</div>
-        <table style={tbl}>
-          <thead><tr>{["Mat ID","Heat No.","Grade","Standard","MTC Status","PMI","Location"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-          <tbody>
-            {MAT_RAW.map(m => (
-              <tr key={m.id}>
-                <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#6366f1" }}>{m.id}</td>
-                <td style={{ ...td, fontFamily: "monospace" }}>{m.heatNo}</td>
-                <td style={td}>{m.grade}</td>
-                <td style={td}>{m.standard}</td>
-                <td style={{ ...td, color: m.mtcStatus === "Uploaded" ? "#059669" : "#dc2626", fontWeight: 600 }}>{m.mtcStatus}</td>
-                <td style={{ ...td, color: m.pmiStatus === "Pass" ? "#059669" : "#d97706", fontWeight: 600 }}>{m.pmiStatus}</td>
-                <td style={td}>{m.location}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          {/* ── SECTION 4: Welder Qualifications ── */}
+          <div className="page-break" />
+          <SH n="04" label="Welder / Welding Operator Qualifications" />
+          <table style={TBL}>
+            <thead><tr>{["Name","Stamp No.","Employer","Process","Standard","Expiry Date","Status"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+            <tbody>
+              {WELDER_DATA.flatMap(w => w.qualifications.map((q, i) => (
+                <tr key={q.id}>
+                  <td style={TD_S(i%2===0)}>{w.firstName} {w.lastName}</td>
+                  <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{w.stampNo}</td>
+                  <td style={TD_S(i%2===0)}>{w.employer}</td>
+                  <td style={TD_S(i%2===0)}>{q.process}</td>
+                  <td style={TD_S(i%2===0)}>{q.standard}</td>
+                  <td style={TD_S(i%2===0)}>{q.expiryDate}</td>
+                  <td style={TD_S(i%2===0)}><StatusBadge v={q.continuityOk ? "Current" : "Lapsed"} /></td>
+                </tr>
+              )))}
+            </tbody>
+          </table>
+          <PageFooter />
 
-        {/* VT Reports */}
-        {vtReps.length > 0 && (
-          <>
-            <div style={h2}>6. Visual Testing Records</div>
-            <table style={tbl}>
-              <thead><tr>{["Report ID","Weld ID","Date","Inspector","Standard","Result"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-              <tbody>
-                {vtReps.map(r => (
-                  <tr key={r.id}>
-                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#6366f1" }}>{r.id}</td>
-                    <td style={{ ...td, fontFamily: "monospace" }}>{r.weldId}</td>
-                    <td style={td}>{r.date}</td>
-                    <td style={td}>{r.inspector}</td>
-                    <td style={td}>{r.standard}</td>
-                    <td style={{ ...td, color: r.result === "PASS" ? "#059669" : r.result === "FAIL" ? "#dc2626" : "#d97706", fontWeight: 700 }}>{r.result}</td>
-                  </tr>
+          {/* ── SECTION 5: Material Traceability ── */}
+          <div className="page-break" />
+          <SH n="05" label="Material Traceability Register" />
+          <table style={TBL}>
+            <thead><tr>{["Mat. ID","Heat No.","Grade / Spec","Standard","Size","Supplier","MTC Status","PMI Result","Location"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+            <tbody>
+              {MAT_RAW.map((m, i) => (
+                <tr key={m.id}>
+                  <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.navy }}>{m.id}</td>
+                  <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{m.heatNo}</td>
+                  <td style={TD_S(i%2===0)}>{m.grade}</td>
+                  <td style={TD_S(i%2===0)}>{m.standard}</td>
+                  <td style={TD_S(i%2===0)}>{m.size}</td>
+                  <td style={TD_S(i%2===0)}>{m.supplier}</td>
+                  <td style={TD_S(i%2===0)}><StatusBadge v={m.mtcStatus} pass={["Uploaded"]} fail={["Missing","Pending"]} /></td>
+                  <td style={TD_S(i%2===0)}><StatusBadge v={m.pmiStatus} pass={["Pass"]} fail={["Fail"]} warn={["N/A","Pending"]} /></td>
+                  <td style={TD_S(i%2===0)}>{m.location}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <PageFooter />
+
+          {/* ── SECTION 6: VT Inspection Records ── */}
+          {vtReps.length > 0 && (
+            <>
+              <div className="page-break" />
+              <SH n="06" label="Visual Testing (VT) Inspection Records" />
+              <table style={TBL}>
+                <thead><tr>{["Report ID","Weld ID","Date","Inspector","Standard","Defects Noted","Result"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {vtReps.map((r, i) => (
+                    <tr key={r.id}>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.navy }}>{r.id}</td>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{r.weldId}</td>
+                      <td style={TD_S(i%2===0)}>{r.date}</td>
+                      <td style={TD_S(i%2===0)}>{r.inspector}</td>
+                      <td style={TD_S(i%2===0)}>{r.standard}</td>
+                      <td style={{ ...TD_S(i%2===0), fontSize:9.5 }}>{r.defects?.join(", ") || "None"}</td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={r.result} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PageFooter />
+            </>
+          )}
+
+          {/* ── SECTION 7: NDT Records ── */}
+          {ndtRecs.length > 0 && (
+            <>
+              <div className="page-break" />
+              <SH n="07" label="Non-Destructive Testing (NDT) Records" />
+              <table style={TBL}>
+                <thead><tr>{["NDT ID","Weld ID","Method","Technician","Qualification","Accept. Std","Date","Result"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {ndtRecs.map((n, i) => (
+                    <tr key={n.id}>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.navy }}>{n.id}</td>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{n.weldId}</td>
+                      <td style={TD_S(i%2===0)}>{n.method}</td>
+                      <td style={TD_S(i%2===0)}>{n.techName}</td>
+                      <td style={TD_S(i%2===0)}>{n.techQual}</td>
+                      <td style={TD_S(i%2===0)}>{n.acceptStd}</td>
+                      <td style={TD_S(i%2===0)}>{n.date}</td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={n.result} pass={["Pass","PASS"]} fail={["Fail","FAIL"]} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PageFooter />
+            </>
+          )}
+
+          {/* ── SECTION 8: Heat Treatment ── */}
+          {htRecs.length > 0 && (
+            <>
+              <div className="page-break" />
+              <SH n="08" label="Heat Treatment Records" />
+              <table style={TBL}>
+                <thead><tr>{["HT ID","Weld / Component ID","HT Type","Target Temp (°C)","Hold Time (min)","Technician","Date","Status"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {htRecs.map((h, i) => (
+                    <tr key={h.id}>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.navy }}>{h.id}</td>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{h.weldId}</td>
+                      <td style={TD_S(i%2===0)}>{h.type}</td>
+                      <td style={{ ...TD_S(i%2===0), textAlign:"center" }}>{h.targetTemp}</td>
+                      <td style={{ ...TD_S(i%2===0), textAlign:"center" }}>{h.soakTime}</td>
+                      <td style={TD_S(i%2===0)}>{h.technician}</td>
+                      <td style={TD_S(i%2===0)}>{h.date}</td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={h.actualStatus} pass={["Pass","Complete"]} fail={["Fail"]} warn={["Pending"]} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PageFooter />
+            </>
+          )}
+
+          {/* ── SECTION 9: NCR Summary ── */}
+          {ncrs.length > 0 && (
+            <>
+              <div className="page-break" />
+              <SH n="09" label="Non-Conformance Report (NCR) Summary" />
+              <table style={TBL}>
+                <thead><tr>{["NCR No.","Weld ID","Defect Description","Priority","Status","Assigned To","Date Raised","CAPA Summary"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {ncrs.map((n, i) => (
+                    <tr key={n.id}>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono, fontWeight:700, color:C.fail }}>{n.id}</td>
+                      <td style={{ ...TD_S(i%2===0), fontFamily:C.mono }}>{n.weldId}</td>
+                      <td style={TD_S(i%2===0)}>{n.defect}</td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={n.priority} pass={["Low"]} warn={["Medium","High"]} fail={["Critical"]} /></td>
+                      <td style={TD_S(i%2===0)}><StatusBadge v={n.status} pass={["Closed"]} warn={["In Progress"]} fail={["Open"]} /></td>
+                      <td style={TD_S(i%2===0)}>{n.assignee}</td>
+                      <td style={TD_S(i%2===0)}>{n.raised}</td>
+                      <td style={{ ...TD_S(i%2===0), fontSize:9.5 }}>{n.capa ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PageFooter />
+            </>
+          )}
+
+          {/* ── SECTION 10: ITP ── */}
+          {itp.length > 0 && (
+            <>
+              <div className="page-break" />
+              <SH n="10" label="Inspection & Test Plan (ITP) Sign-off" />
+              {itp.map(plan => (
+                <div key={plan.id} style={{ marginBottom:20 }}>
+                  <div style={{ background:C.blueLight, border:`1px solid #93c5fd`, borderRadius:5, padding:"6px 12px", marginBottom:8, fontSize:11, fontWeight:600, color:C.navy }}>
+                    {plan.itpNo} — {plan.component} &nbsp;
+                    <span style={{ fontSize:9.5, fontWeight:500, color:C.textSoft }}>Rev {plan.rev} · {plan.status}</span>
+                  </div>
+                  <table style={TBL}>
+                    <thead><tr>{["#","Activity / Description","Inspection Method","Hold","Status","Inspector Sign","Client Sign","Date"].map(h => <th key={h} style={TH_S}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {plan.steps.map((s, i) => (
+                        <tr key={s.seq}>
+                          <td style={{ ...TD_S(i%2===0), textAlign:"center", fontWeight:700 }}>{s.seq}</td>
+                          <td style={TD_S(i%2===0)}>{s.activity}</td>
+                          <td style={TD_S(i%2===0)}>{s.method}</td>
+                          <td style={{ ...TD_S(i%2===0), textAlign:"center" }}>
+                            <span style={{ fontWeight:700, fontSize:11, color: s.holdType==="H" ? C.fail : s.holdType==="W" ? C.warn : C.pass }}>{s.holdType}</span>
+                          </td>
+                          <td style={TD_S(i%2===0)}><StatusBadge v={s.status} pass={["Completed"]} warn={["In Progress"]} fail={["Pending"]} /></td>
+                          <td style={{ ...TD_S(i%2===0), color:C.textSoft }}>{s.signedInspector || "—"}</td>
+                          <td style={{ ...TD_S(i%2===0), color:C.textSoft }}>{s.signedClient || "—"}</td>
+                          <td style={{ ...TD_S(i%2===0), color:C.textSoft }}>{s.date || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+              <PageFooter />
+            </>
+          )}
+
+          {/* ── SECTION 11: Release Certificate ── */}
+          <div className="page-break" />
+          <SH n="11" label="Final Release Certificate &amp; Document Declaration" />
+
+          <div style={{ border:`2px solid ${C.navy}`, borderRadius:6, overflow:"hidden", marginBottom:20 }}>
+            {/* Certificate header */}
+            <div style={{ background:C.navy, color:"#ffffff", padding:"12px 18px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div>
+                <div style={{ fontWeight:800, fontSize:14, letterSpacing:"-0.01em" }}>MANUFACTURING DATA RECORD</div>
+                <div style={{ fontSize:10, color:"#93c5fd", marginTop:2 }}>Final Release Certificate</div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontWeight:700, fontSize:12 }}>{docRef}</div>
+                <div style={{ fontSize:10, color:"#93c5fd" }}>Issue Date: {today}</div>
+              </div>
+            </div>
+
+            <div style={{ padding:"16px 18px" }}>
+              <p style={{ fontSize:11, lineHeight:1.7, marginBottom:16, color:C.text }}>
+                This Manufacturing Data Record has been compiled in accordance with <strong>{project?.standard}</strong> and all applicable
+                client specifications, codes, and standards. All documentation referenced herein has been reviewed and
+                verified as current, complete, and accurate at the time of issue. This package is released for client
+                review and acceptance.
+              </p>
+
+              {/* Summary statistics */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:20 }}>
+                {([
+                  ["Total Welds",    String(project?.welds.total ?? "—"),   C.navy],
+                  ["Accepted",       String(project?.welds.complete ?? "—"), C.pass],
+                  ["Open NCRs",      String(ncrs.filter(n => n.status !== "Closed").length), ncrs.filter(n => n.status !== "Closed").length > 0 ? C.fail : C.pass],
+                  ["Completeness",   `${pkg.completeness}%`,                 pkg.completeness === 100 ? C.pass : C.warn],
+                ] as const).map(([label, val, col]) => (
+                  <div key={label} style={{ background:C.rowAlt, border:`1px solid ${C.border}`, borderRadius:5, padding:"10px 12px", textAlign:"center" }}>
+                    <div style={{ fontSize:18, fontWeight:800, color:col }}>{val}</div>
+                    <div style={{ fontSize:9.5, color:C.textSoft, fontWeight:600, marginTop:2 }}>{label}</div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </>
-        )}
+              </div>
 
-        {/* NDT Records */}
-        {ndtRecs.length > 0 && (
-          <>
-            <div style={h2}>7. NDT Records</div>
-            <table style={tbl}>
-              <thead><tr>{["NDT ID","Weld ID","Method","Technician","Qualification","Date","Result"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-              <tbody>
-                {ndtRecs.map(n => (
-                  <tr key={n.id}>
-                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#6366f1" }}>{n.id}</td>
-                    <td style={{ ...td, fontFamily: "monospace" }}>{n.weldId}</td>
-                    <td style={td}>{n.method}</td>
-                    <td style={td}>{n.techName}</td>
-                    <td style={td}>{n.techQual}</td>
-                    <td style={td}>{n.date}</td>
-                    <td style={{ ...td, color: n.result === "Pass" ? "#059669" : "#dc2626", fontWeight: 700 }}>{n.result}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-
-        {/* Heat Treatment */}
-        {htRecs.length > 0 && (
-          <>
-            <div style={h2}>8. Heat Treatment Records</div>
-            <table style={tbl}>
-              <thead><tr>{["HT ID","Weld ID","Type","Target Temp","Soak Time","Technician","Date","Result"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-              <tbody>
-                {htRecs.map(h => (
-                  <tr key={h.id}>
-                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#6366f1" }}>{h.id}</td>
-                    <td style={{ ...td, fontFamily: "monospace" }}>{h.weldId}</td>
-                    <td style={td}>{h.type}</td>
-                    <td style={td}>{h.targetTemp}°C</td>
-                    <td style={td}>{h.soakTime} min</td>
-                    <td style={td}>{h.technician}</td>
-                    <td style={td}>{h.date}</td>
-                    <td style={{ ...td, color: h.actualStatus === "Pass" ? "#059669" : h.actualStatus === "Pending" ? "#d97706" : "#dc2626", fontWeight: 700 }}>{h.actualStatus}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-
-        {/* NCR Summary */}
-        {ncrs.length > 0 && (
-          <>
-            <div style={h2}>9. NCR / Non-Conformance Summary</div>
-            <table style={tbl}>
-              <thead><tr>{["NCR ID","Weld ID","Defect","Priority","Status","Assignee","Raised","CAPA"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-              <tbody>
-                {ncrs.map(n => (
-                  <tr key={n.id}>
-                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, color: "#dc2626" }}>{n.id}</td>
-                    <td style={{ ...td, fontFamily: "monospace" }}>{n.weldId}</td>
-                    <td style={td}>{n.defect}</td>
-                    <td style={{ ...td, color: n.priority === "Critical" ? "#dc2626" : n.priority === "High" ? "#ea580c" : "#d97706", fontWeight: 600 }}>{n.priority}</td>
-                    <td style={{ ...td, color: n.status === "Closed" ? "#059669" : n.status === "Open" ? "#dc2626" : "#d97706", fontWeight: 600 }}>{n.status}</td>
-                    <td style={td}>{n.assignee}</td>
-                    <td style={td}>{n.raised}</td>
-                    <td style={td}>{n.capa ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-
-        {/* ITP */}
-        {itp.length > 0 && (
-          <>
-            <div style={h2}>10. Inspection & Test Plan Sign-off</div>
-            {itp.map(plan => (
-              <div key={plan.id}>
-                <div style={h3}>{plan.itpNo} – {plan.component}</div>
-                <table style={tbl}>
-                  <thead><tr>{["Step","Activity","Method","Hold","Status","Inspector","Client","Date"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {plan.steps.map(s => (
-                      <tr key={s.seq}>
-                        <td style={{ ...td, textAlign: "center" }}>{s.seq}</td>
-                        <td style={td}>{s.activity}</td>
-                        <td style={td}>{s.method}</td>
-                        <td style={{ ...td, textAlign: "center", fontWeight: 700, color: s.holdType === "H" ? "#dc2626" : s.holdType === "W" ? "#d97706" : "#059669" }}>{s.holdType}</td>
-                        <td style={{ ...td, color: s.status === "Completed" ? "#059669" : s.status === "In Progress" ? "#d97706" : "#999", fontWeight: 600 }}>{s.status}</td>
-                        <td style={td}>{s.signedInspector || "—"}</td>
-                        <td style={td}>{s.signedClient || "—"}</td>
-                        <td style={td}>{s.date || "—"}</td>
-                      </tr>
+              {/* Signature table */}
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr>
+                    {["","Prepared By","Reviewed By","Client Acceptance"].map(h => (
+                      <th key={h} style={{ ...TH_S, textAlign:"center" }}>{h}</th>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-          </>
-        )}
-
-        {/* Release certificate */}
-        <div style={h2}>11. Release Declaration</div>
-        <div style={{ border: "2px solid #6366f1", borderRadius: 8, padding: 16, marginTop: 8 }}>
-          <div style={{ fontSize: 12, marginBottom: 8 }}>
-            This Manufacturing Data Record has been compiled in accordance with <strong>{project?.standard}</strong> and all applicable client specifications. All documentation referenced herein has been verified as current and complete at the time of issue.
+                  </tr>
+                </thead>
+                <tbody>
+                  {(["Name","Title / Role","Signature","Date"] as const).map((row, i) => (
+                    <tr key={row}>
+                      <td style={{ ...TD_S(i%2===0), fontWeight:600, color:C.navy, width:110 }}>{row}</td>
+                      {(["Prepared By","Reviewed By","Client Acceptance"] as [string,string,string]).map(col => {
+                        const field = col === "Prepared By" ? "prep" : col === "Reviewed By" ? "review" : "client";
+                        if (row === "Signature") {
+                          const sig = sigs[field];
+                          return (
+                            <td key={col} style={{ ...TD_S(i%2===0), height:68, textAlign:"center", verticalAlign:"middle" }}>
+                              {sig ? (
+                                <div>
+                                  <img src={sig} alt="signature" style={{ maxHeight:50, maxWidth:160, display:"block", margin:"0 auto" }} />
+                                  <span style={{ fontSize:9, color:C.blue, cursor:"pointer", marginTop:3, display:"block" }} onClick={() => setSigModal(field)}>✎ Re-sign</span>
+                                </div>
+                              ) : (
+                                <button onClick={() => setSigModal(field)} style={{ background:C.blueLight, border:`1px solid #93c5fd`, color:C.blue, borderRadius:6, padding:"9px 16px", cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:"inherit", letterSpacing:"0.01em" }}>
+                                  ✍ Tap to Sign
+                                </button>
+                              )}
+                            </td>
+                          );
+                        }
+                        if (row === "Name") return (
+                          <td key={col} style={{ ...TD_S(i%2===0), height:30 }}>
+                            {editCell(`${field}_name`, "Enter name…", col === "Prepared By" ? pkg.createdBy : "")}
+                          </td>
+                        );
+                        if (row === "Title / Role") return (
+                          <td key={col} style={{ ...TD_S(i%2===0), height:30 }}>
+                            {editCell(`${field}_title`, "Enter title / role…")}
+                          </td>
+                        );
+                        if (row === "Date") return (
+                          <td key={col} style={{ ...TD_S(i%2===0), height:30 }}>
+                            {editCell(`${field}_date`, "DD / MM / YYYY", col === "Prepared By" ? today : "")}
+                          </td>
+                        );
+                        return <td key={col} style={{ ...TD_S(i%2===0), height:30 }} />;
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 16 }}>
-            {["Prepared By","Reviewed By","Client Acceptance"].map(role => (
-              <div key={role} style={{ borderTop: "1px solid #999", paddingTop: 8 }}>
-                <div style={{ fontSize: 10, color: "#666", marginBottom: 20 }}>{role}</div>
-                <div style={{ fontSize: 10, color: "#888" }}>Name: _______________</div>
-                <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Date: _______________</div>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        {/* Footer */}
-        <div style={{ marginTop: 24, paddingTop: 10, borderTop: "1px solid #ddd", fontSize: 9, color: "#999", display: "flex", justifyContent: "space-between" }}>
-          <span>WQMS Pro · {pkg.id} Rev {pkg.rev}</span>
-          <span>Generated {today}</span>
-          <span>CONFIDENTIAL – For authorised personnel only</span>
+          {/* Document control footer */}
+          <div style={{ background:C.rowAlt, border:`1px solid ${C.border}`, borderRadius:5, padding:"10px 14px", fontSize:9.5, color:C.textSoft, lineHeight:1.6 }}>
+            <strong style={{ color:C.navy }}>Document Control Notice:</strong> This document is controlled. Printed copies are uncontrolled unless
+            stamped "CONTROLLED". The current revision is maintained in WQMS Pro. Any reproduction or distribution
+            requires written authorisation from the issuing authority. Reference: {docRef}.
+          </div>
+
+          <PageFooter />
         </div>
+      </div>
+
       </div>
     </div>
   );

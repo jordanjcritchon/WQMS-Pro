@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { D } from "./theme";
+import { WQLogo } from "./components";
 
 interface Props {
   onSave: (key: string) => void;
@@ -31,19 +32,11 @@ export function SetupScreen({ onSave }: Props) {
       }}>
         {/* Logo / identity */}
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{
-            width: 72, height: 72, borderRadius: 20,
-            background: D.accentFaint, border: `1px solid ${D.accentBorder}`,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            margin: "0 auto 16px",
-          }}>
-            <svg viewBox="0 0 72 72" width="56" height="56">
-              <path d="M 14 46 Q 36 20 58 46" stroke="#6366f1" strokeWidth="5" fill="none" strokeLinecap="round"/>
-              <path d="M 18 46 Q 36 24 54 46" stroke="#8b5cf6" strokeWidth="2.5" fill="none" strokeLinecap="round" opacity="0.6"/>
-            </svg>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+            <WQLogo size={68} />
           </div>
           <div style={{ color: D.text, fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em" }}>WQMS Pro</div>
-          <div style={{ color: D.textMid, fontSize: 13, marginTop: 4 }}>Weld Quality Management System</div>
+          <div style={{ color: D.textMid, fontSize: 13, marginTop: 4 }}>Welding Quality Management System</div>
         </div>
 
         <div style={{ marginBottom: 24 }}>
