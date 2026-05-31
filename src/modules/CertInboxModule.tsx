@@ -109,7 +109,7 @@ const EmptyRow: React.FC<{ cols: number; msg: string }> = ({ cols, msg }) => (
 
 // ── Monitor tab ───────────────────────────────────────────────────────────────
 
-const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: Date | null; onRefresh: () => void }> = ({ emails, loading, lastPoll, onRefresh }) => (
+const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: Date | null; onRefresh: () => void; onClearProcessed: () => void }> = ({ emails, loading, lastPoll, onRefresh, onClearProcessed }) => (
   <div style={{ padding: 20, flex: 1, overflowY: "auto" }}>
     {/* Status bar */}
     <Card s={{ padding: "14px 20px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -125,6 +125,10 @@ const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: D
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         {lastPoll && <span style={{ color: D.textSoft, fontSize: 11 }}>Last checked {ago(lastPoll.toISOString())}</span>}
+        <button onClick={onClearProcessed} style={{
+          background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail,
+          borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+        }}>Clear Processed</button>
         <button onClick={onRefresh} disabled={loading} style={{
           background: D.accentFaint, border: `1px solid ${D.accentBorder}`, color: D.accent,
           borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
@@ -197,7 +201,7 @@ export const CertInboxModule: React.FC = () => {
     setLoading(true);
     try {
       const [inboxRes, matRes, conRes, ndtRes, htRes, welRes] = await Promise.all([
-        supabase.from("cert_inbox").select("*").order("received_at", { ascending: false }).limit(50),
+        supabase.from("cert_inbox").select("*").order("received_at", { ascending: false }).limit(200),
         supabase.from("material_cert_register").select("*").order("created_at", { ascending: false }),
         supabase.from("consumable_cert_register").select("*").order("created_at", { ascending: false }),
         supabase.from("ndt_report_register").select("*").order("created_at", { ascending: false }),
@@ -215,6 +219,13 @@ export const CertInboxModule: React.FC = () => {
       setLoading(false);
     }
   }, []);
+
+  const clearProcessed = useCallback(async () => {
+    if (!supabase) return;
+    if (!window.confirm("Remove all processed emails from the feed? This only clears the feed — extracted cert data in the registers is kept.")) return;
+    await supabase.from("cert_inbox").delete().eq("extracted", true);
+    load();
+  }, [load]);
 
   const deleteCert = useCallback(async (table: string, id: string) => {
     if (!supabase) return;
@@ -249,7 +260,7 @@ export const CertInboxModule: React.FC = () => {
 
       {/* Monitor */}
       {tab === "monitor" && (
-        <MonitorTab emails={emails} loading={loading} lastPoll={lastPoll} onRefresh={load} />
+        <MonitorTab emails={emails} loading={loading} lastPoll={lastPoll} onRefresh={load} onClearProcessed={clearProcessed} />
       )}
 
       {/* Material Certs */}
