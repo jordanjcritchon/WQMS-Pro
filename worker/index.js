@@ -17,7 +17,7 @@ import { createClient } from "@supabase/supabase-js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const POLL_MS    = 30 * 1000;
+const POLL_MS    = parseInt(process.env.POLL_SECONDS || "30") * 1000;
 const CERT_EMAIL = process.env.CERT_EMAIL || "wqmscerts@gmail.com";
 const APP_PASS   = process.env.GMAIL_APP_PASSWORD;
 
