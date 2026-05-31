@@ -5,14 +5,14 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node --experimental-websocket index.js"
+    "start": "node index.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
-    "@supabase/supabase-js": "^2.45.0",
+    "@supabase/supabase-js": "2.38.4",
     "imapflow": "^1.0.162",
     "dotenv": "^16.4.5",
     "ws": "^8.18.0"
