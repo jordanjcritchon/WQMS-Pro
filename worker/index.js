@@ -72,9 +72,12 @@ const CERT_SCHEMA = `{
 }`;
 
 async function extractCertData(base64Data, mimeType) {
-  const contentBlock = mimeType === "application/pdf"
+  // Normalise non-standard MIME types Claude doesn't accept
+  const safeMime = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
+
+  const contentBlock = safeMime === "application/pdf"
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
-    : { type: "image",    source: { type: "base64", media_type: mimeType,           data: base64Data } };
+    : { type: "image",    source: { type: "base64", media_type: safeMime,          data: base64Data } };
 
   const msg = await anthropic.messages.create({
     model:      "claude-opus-4-7",
