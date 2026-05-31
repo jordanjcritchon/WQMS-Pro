@@ -348,9 +348,8 @@ async function poll() {
     await client.connect();
     await client.mailboxOpen("INBOX");
 
-    // Find all unread messages
+    // Process new unread messages
     const uids = await client.search({ seen: false });
-
     if (uids.length === 0) {
       console.log("[WQMS] No new messages");
     } else {
@@ -360,6 +359,24 @@ async function poll() {
         await new Promise(r => setTimeout(r, 1000));
       }
     }
+
+    // Sync deletions — remove feed entries for emails no longer in Gmail
+    const allUids = await client.search({ all: true });
+    const allUidStrings = new Set(allUids.map(u => String(u)));
+
+    const { data: stored } = await supabase
+      .from("cert_inbox")
+      .select("id, gmail_message_id");
+
+    if (stored && stored.length > 0) {
+      const deleted = stored.filter(r => !allUidStrings.has(r.gmail_message_id));
+      if (deleted.length > 0) {
+        const ids = deleted.map(r => r.id);
+        await supabase.from("cert_inbox").delete().in("id", ids);
+        console.log(`[WQMS] Removed ${deleted.length} deleted email(s) from feed`);
+      }
+    }
+
   } catch (err) {
     console.error("[WQMS] IMAP error:", err.message);
   } finally {
