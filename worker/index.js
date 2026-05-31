@@ -14,6 +14,10 @@ import "dotenv/config";
 import { ImapFlow } from "imapflow";
 import Anthropic    from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
+
+// Polyfill WebSocket for Node.js < 22
+if (!globalThis.WebSocket) globalThis.WebSocket = ws;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -23,7 +27,8 @@ const APP_PASS   = process.env.GMAIL_APP_PASSWORD;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY,
+  { realtime: { transport: ws } }
 );
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
