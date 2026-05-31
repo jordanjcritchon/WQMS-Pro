@@ -35,33 +35,7 @@ const SUPPORTED_TYPES = [
 
 // ── Claude extraction ─────────────────────────────────────────────────────────
 
-async function extractCertData(base64Data, mimeType) {
-  const contentBlock = mimeType === "application/pdf"
-    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
-    : { type: "image",    source: { type: "base64", media_type: mimeType,           data: base64Data } };
-
-  const msg = await anthropic.messages.create({
-    model:      "claude-opus-4-7",
-    max_tokens: 1024,
-    messages: [{
-      role:    "user",
-      content: [
-        contentBlock,
-        { type: "text", text: `You are a welding QA document specialist. Extract all key fields from this certificate or report.
-
-Return ONLY valid JSON — no markdown, no explanation.
-
-Classify the document type as one of:
-- material       (material test certificate / mill cert)
-- consumable     (electrode / filler wire / flux cert)
-- ndt            (NDT report: RT, UT, MT, PT, VT)
-- heat_treatment (PWHT / heat treatment record)
-- welder_qual    (welder qualification certificate)
-- wps            (welding procedure specification)
-- other
-
-Return exactly this JSON structure (leave unknown fields as empty string or null):
-{
+const CERT_SCHEMA = `{
   "cert_type": "",
   "cert_ref": "",
   "supplier": "",
@@ -95,16 +69,49 @@ Return exactly this JSON structure (leave unknown fields as empty string or null
   "positions": [],
   "expiry_date": "",
   "test_lab": ""
-}
+}`;
 
-For NDT result use PASS or FAIL only.` },
+async function extractCertData(base64Data, mimeType) {
+  const contentBlock = mimeType === "application/pdf"
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
+    : { type: "image",    source: { type: "base64", media_type: mimeType,           data: base64Data } };
+
+  const msg = await anthropic.messages.create({
+    model:      "claude-opus-4-7",
+    max_tokens: 4096,
+    messages: [{
+      role:    "user",
+      content: [
+        contentBlock,
+        { type: "text", text: `You are a welding QA document specialist. Carefully read the ENTIRE document — it may contain multiple certificates or reports on separate pages or sections.
+
+Return ONLY valid JSON — no markdown, no explanation.
+
+Classify each document/certificate found as one of:
+- material       (material test certificate / mill cert)
+- consumable     (electrode / filler wire / flux cert)
+- ndt            (NDT report: RT, UT, MT, PT, VT)
+- heat_treatment (PWHT / heat treatment record)
+- welder_qual    (welder qualification certificate)
+- wps            (welding procedure specification)
+- other
+
+IMPORTANT: If the document contains multiple separate certificates or reports, return a JSON ARRAY with one object per certificate. If it contains only one certificate, return a JSON ARRAY with one object.
+
+Each object must follow this exact structure (leave unknown fields as empty string or null):
+${CERT_SCHEMA}
+
+For NDT result use PASS or FAIL only.
+Do not miss any certificate — check every page thoroughly.` },
       ],
     }],
   });
 
   const text = msg.content[0].text.trim()
     .replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  // Always return an array
+  return Array.isArray(parsed) ? parsed : [parsed];
 }
 
 // ── Supabase Storage upload ───────────────────────────────────────────────────
@@ -233,32 +240,39 @@ async function processEmail(client, uid) {
 
     try {
       console.log(`[WQMS] Extracting: ${att.filename} (${att.mimeType})`);
-      const extracted = await extractCertData(att.base64, att.mimeType);
-      console.log(`[WQMS] Classified: ${extracted.cert_type}`);
+      const certs = await extractCertData(att.base64, att.mimeType);
+      console.log(`[WQMS] Found ${certs.length} cert(s) in ${att.filename}`);
 
       const bucketMap = {
         material: "certs-material", consumable: "certs-consumable",
         ndt: "certs-ndt", heat_treatment: "certs-ht",
         welder_qual: "certs-welder", wps: "wps-documents",
       };
-      const bucket    = bucketMap[extracted.cert_type] || "certs-material";
-      const safeName  = att.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const storagePath = `${new Date().toISOString().slice(0,10)}/${inboxRow.id}/${safeName}`;
 
+      // Upload the PDF once, reuse URL for all certs found inside it
+      const safeName    = att.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `${new Date().toISOString().slice(0,10)}/${inboxRow.id}/${safeName}`;
       let docUrl = "";
       try {
-        docUrl = await uploadToStorage(bucket, storagePath, att.base64, att.mimeType);
+        const firstBucket = bucketMap[certs[0]?.cert_type] || "certs-material";
+        docUrl = await uploadToStorage(firstBucket, storagePath, att.base64, att.mimeType);
       } catch (e) {
         console.warn("[WQMS] Storage upload failed:", e.message);
       }
 
-      await saveToRegister(inboxRow.id, extracted, storagePath, docUrl);
+      // Save each extracted cert to its register
+      for (let i = 0; i < certs.length; i++) {
+        const extracted = certs[i];
+        console.log(`[WQMS] Saving cert ${i + 1}/${certs.length}: ${extracted.cert_type}`);
+        await saveToRegister(inboxRow.id, extracted, storagePath, docUrl);
+      }
 
+      const certTypes = [...new Set(certs.map(c => c.cert_type))].join(", ");
       await supabase.from("cert_inbox")
-        .update({ extracted: true, cert_type: extracted.cert_type })
+        .update({ extracted: true, cert_type: certTypes })
         .eq("id", inboxRow.id);
 
-      console.log(`[WQMS] ✓ ${att.filename} → ${extracted.cert_type} register`);
+      console.log(`[WQMS] ✓ ${att.filename} → ${certs.length} cert(s): ${certTypes}`);
 
     } catch (e) {
       console.error(`[WQMS] Failed on ${att.filename}:`, e.message);
