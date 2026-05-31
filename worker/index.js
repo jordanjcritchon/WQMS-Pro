@@ -348,8 +348,8 @@ async function poll() {
     await client.connect();
     await client.mailboxOpen("INBOX");
 
-    // Process new unread messages
-    const uids = await client.search({ seen: false });
+    // Process new unread messages (use uid:true for stable UIDs)
+    const uids = await client.search({ seen: false }, { uid: true });
     if (uids.length === 0) {
       console.log("[WQMS] No new messages");
     } else {
@@ -360,8 +360,9 @@ async function poll() {
       }
     }
 
-    // Sync deletions — remove feed entries for emails no longer in Gmail
-    const allUids = await client.search({ all: true });
+    // Sync deletions — remove feed entries for emails no longer in Gmail INBOX
+    // Use uid:true so UIDs are stable and don't shift when emails are deleted
+    const allUids = await client.search({ all: true }, { uid: true });
     const allUidStrings = new Set(allUids.map(u => String(u)));
 
     const { data: stored } = await supabase
