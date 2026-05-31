@@ -112,7 +112,7 @@ const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: D
         </div>
         <div>
           <div style={{ color: D.text, fontWeight: 700, fontSize: 13 }}>Live Monitoring</div>
-          <div style={{ color: D.textSoft, fontSize: 11 }}>wqmscerts@gmail.com · polling every 2 minutes</div>
+          <div style={{ color: D.textSoft, fontSize: 11 }}>wqmscerts@gmail.com · polling every 30 seconds</div>
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

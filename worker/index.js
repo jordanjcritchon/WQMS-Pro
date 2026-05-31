@@ -17,7 +17,7 @@ import { createClient } from "@supabase/supabase-js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const POLL_MS    = 2 * 60 * 1000;
+const POLL_MS    = 30 * 1000;
 const CERT_EMAIL = process.env.CERT_EMAIL || "wqmscerts@gmail.com";
 const APP_PASS   = process.env.GMAIL_APP_PASSWORD;
 
@@ -370,7 +370,7 @@ console.log("╔═════════════════════�
 console.log("║  WQMS Pro — Gmail Cert Worker        ║");
 console.log("╠══════════════════════════════════════╣");
 console.log(`║  Inbox : ${CERT_EMAIL.padEnd(27)}║`);
-console.log("║  Poll  : every 2 minutes             ║");
+console.log("║  Poll  : every 30 seconds            ║");
 console.log("╚══════════════════════════════════════╝\n");
 
 poll();
