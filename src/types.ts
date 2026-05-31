@@ -26,16 +26,18 @@ export interface WPS {
   approvalDate:   string;
   status:         "Active" | "Pending Review" | "Expired";
   expiryDate?:    string;
+  documentUrl?:   string;
 }
 
 export interface PQR {
-  id:       string;
-  wpsRef:   string;
-  testDate: string;
-  testLab:  string;
-  standard: string;
-  result:   string;
-  tests:    string[];
+  id:           string;
+  wpsRef:       string;
+  testDate:     string;
+  testLab:      string;
+  standard:     string;
+  result:       string;
+  tests:        string[];
+  documentUrl?: string;
 }
 
 // ─── Welders ─────────────────────────────────────────────────────────────────

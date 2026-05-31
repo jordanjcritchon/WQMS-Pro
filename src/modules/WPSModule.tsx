@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { D, inp } from "../theme";
 import { Tag, Label, StatusDot, SectionHeader, FieldRow, TabBar, Button } from "../components";
 import { WPS_DATA, PQR_DATA } from "../data";
 import { WPS_SM } from "../statusMeta";
+import { supabase } from "../lib/supabase";
 import type { WPS } from "../types";
 
 const PROCESSES  = ["111 – SMAW","121 – SAW","131 – MIG","135 – MAG","141 – TIG"];
@@ -38,9 +39,12 @@ export const WPSModule: React.FC = () => {
       return [...stored, ...WPS_DATA.filter(w => !ids.has(w.id))];
     } catch { return WPS_DATA; }
   });
-  const [creating, setCreating] = useState(false);
-  const [form,     setForm]    = useState(emptyForm());
-  const [success,  setSuccess] = useState(false);
+  const [creating,   setCreating]   = useState(false);
+  const [form,       setForm]       = useState(emptyForm());
+  const [success,    setSuccess]    = useState(false);
+  const [docFile,    setDocFile]    = useState<File | null>(null);
+  const [uploading,  setUploading]  = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     try {
@@ -61,13 +65,29 @@ export const WPSModule: React.FC = () => {
     });
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!form.title || !form.pqrRef || !form.approvedBy) return;
+    setUploading(true);
     const newId = `WPS-${String(wpsList.length + 1).padStart(3, "0")}`;
+    let documentUrl = "";
+
+    if (docFile && supabase) {
+      try {
+        const safeName = docFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `${newId}/${safeName}`;
+        const { error } = await supabase.storage.from("wps-documents").upload(path, docFile, { upsert: true });
+        if (!error) {
+          const { data } = supabase.storage.from("wps-documents").getPublicUrl(path);
+          documentUrl = data.publicUrl;
+        }
+      } catch {}
+    }
+
     const newWPS: WPS = {
       id: newId,
       ...form,
       materialGroups: form.materialGroups.length ? form.materialGroups : ["—"],
+      documentUrl,
     };
     setWpsList(prev => {
       const updated = [...prev, newWPS];
@@ -78,11 +98,13 @@ export const WPSModule: React.FC = () => {
       } catch {}
       return updated;
     });
+    setUploading(false);
     setSuccess(true);
     setTimeout(() => {
       setSuccess(false);
       setCreating(false);
       setForm(emptyForm());
+      setDocFile(null);
       setSel(newWPS);
     }, 1500);
   };
@@ -148,6 +170,18 @@ export const WPSModule: React.FC = () => {
               <FieldRow label="Standard"    value={sel.standard} />
               <FieldRow label="Approved By" value={sel.approvedBy} />
               <FieldRow label="Date"        value={sel.approvalDate} />
+              {sel.documentUrl && (
+                <>
+                  <SectionHeader>Document</SectionHeader>
+                  <a href={sel.documentUrl} target="_blank" rel="noreferrer" style={{
+                    display: "block", background: D.accentFaint, border: `1px solid ${D.accentBorder}`,
+                    color: D.accent, borderRadius: 7, padding: "9px 14px", fontSize: 12,
+                    fontWeight: 600, textAlign: "center", textDecoration: "none", marginTop: 4,
+                  }}>
+                    View Document
+                  </a>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -227,6 +261,25 @@ export const WPSModule: React.FC = () => {
                   <Label c="Approval Date" />
                   <input type="date" value={form.approvalDate} onChange={set("approvalDate")} style={{ ...inp, colorScheme: "dark" }} />
                 </div>
+                <div style={{ marginTop: 10 }}>
+                  <Label c="Attach Document (PDF, Excel, JPEG)" />
+                  <div
+                    onClick={() => fileRef.current?.click()}
+                    onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setDocFile(f); }}
+                    onDragOver={e => e.preventDefault()}
+                    style={{ border: `2px dashed ${docFile ? D.accentBorder : D.border}`, borderRadius: 7, padding: "12px 14px", cursor: "pointer", background: docFile ? D.accentFaint : D.surfaceAlt, textAlign: "center" }}
+                  >
+                    {docFile
+                      ? <span style={{ color: D.accent, fontSize: 12, fontWeight: 600 }}>{docFile.name}</span>
+                      : <span style={{ color: D.textSoft, fontSize: 12 }}>Drop file here or click to browse</span>
+                    }
+                    <input ref={fileRef} type="file" accept=".pdf,.xlsx,.xls,.jpg,.jpeg,.png" style={{ display: "none" }}
+                      onChange={e => e.target.files?.[0] && setDocFile(e.target.files[0])} />
+                  </div>
+                  {docFile && (
+                    <button onClick={() => setDocFile(null)} style={{ marginTop: 4, background: "none", border: "none", color: D.fail, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>Remove file</button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -279,10 +332,10 @@ export const WPSModule: React.FC = () => {
             <Button
               color={D.accent}
               onClick={handleSubmit}
-              disabled={!form.title || !form.pqrRef || !form.approvedBy || form.processes.length === 0}
+              disabled={uploading || !form.title || !form.pqrRef || !form.approvedBy || form.processes.length === 0}
               style={{ minWidth: 160 }}
             >
-              Create WPS
+              {uploading ? "Saving…" : "Create WPS"}
             </Button>
             <Button outline onClick={() => { setCreating(false); setForm(emptyForm()); }}>Cancel</Button>
             {(!form.title || !form.pqrRef || !form.approvedBy || form.processes.length === 0) && (
@@ -297,7 +350,7 @@ export const WPSModule: React.FC = () => {
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10, boxShadow: D.shadow }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr>{["PQR No.", "WPS", "Test Date", "Lab", "Standard", "Tests", "Result"].map(h => (
+                <tr>{["PQR No.", "WPS", "Test Date", "Lab", "Standard", "Tests", "Result", "Document"].map(h => (
                   <th key={h} style={{ color: D.textSoft, fontWeight: 600, fontSize: 11, textAlign: "left", padding: "10px 12px", borderBottom: `1px solid ${D.border}`, background: D.surfaceAlt, whiteSpace: "nowrap" }}>{h}</th>
                 ))}</tr>
               </thead>
@@ -317,6 +370,11 @@ export const WPSModule: React.FC = () => {
                     <td style={{ padding: "10px 12px", color: D.textMid, fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.standard}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}><div style={{ display: "flex", flexWrap: "wrap" }}>{p.tests.map(t => <Tag key={t} label={t} kind="green" />)}</div></td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}><Tag label={p.result} kind="green" /></td>
+                    <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}>
+                      {p.documentUrl
+                        ? <a href={p.documentUrl} target="_blank" rel="noreferrer" style={{ color: D.accent, fontSize: 12, fontWeight: 600 }}>View</a>
+                        : <span style={{ color: D.textSoft, fontSize: 12 }}>—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
