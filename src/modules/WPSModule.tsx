@@ -39,12 +39,60 @@ export const WPSModule: React.FC = () => {
       return [...stored, ...WPS_DATA.filter(w => !ids.has(w.id))];
     } catch { return WPS_DATA; }
   });
-  const [creating,   setCreating]   = useState(false);
-  const [form,       setForm]       = useState(emptyForm());
-  const [success,    setSuccess]    = useState(false);
-  const [docFile,    setDocFile]    = useState<File | null>(null);
-  const [uploading,  setUploading]  = useState(false);
+  const [creating,    setCreating]    = useState(false);
+  const [form,        setForm]        = useState(emptyForm());
+  const [success,     setSuccess]     = useState(false);
+  const [docFile,     setDocFile]     = useState<File | null>(null);
+  const [uploading,   setUploading]   = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // PQR create state
+  const [pqrList, setPqrList] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("wqms_pqr_main_register") || "[]");
+      const ids = new Set(stored.map((p: {id:string}) => p.id));
+      return [...stored, ...PQR_DATA.filter(p => !ids.has(p.id))];
+    } catch { return PQR_DATA; }
+  });
+  const [creatingPqr,  setCreatingPqr]  = useState(false);
+  const [pqrForm,      setPqrForm]      = useState({ wpsRef: "", testDate: new Date().toISOString().split("T")[0], testLab: "", standard: "ISO 15614-1", tests: [] as string[], result: "PASS" });
+  const [pqrFile,      setPqrFile]      = useState<File | null>(null);
+  const [pqrUploading, setPqrUploading] = useState(false);
+  const [pqrSuccess,   setPqrSuccess]   = useState(false);
+  const pqrFileRef = useRef<HTMLInputElement>(null);
+
+  const TEST_TYPES = ["Tensile","Bend","Impact","Hardness","Macro","Visual","RT","UT","MT","PT"];
+
+  const handlePqrSubmit = async () => {
+    if (!pqrForm.wpsRef || !pqrForm.testLab) return;
+    setPqrUploading(true);
+    const newId = `PQR-${String(pqrList.length + 1).padStart(3, "0")}`;
+    let documentUrl = "";
+    if (pqrFile && supabase) {
+      try {
+        const safeName = pqrFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `pqr/${newId}/${safeName}`;
+        const { error } = await supabase.storage.from("wps-documents").upload(path, pqrFile, { upsert: true });
+        if (!error) {
+          const { data } = supabase.storage.from("wps-documents").getPublicUrl(path);
+          documentUrl = data.publicUrl;
+        }
+      } catch {}
+    }
+    const newPqr = { id: newId, ...pqrForm, documentUrl };
+    setPqrList((prev: typeof PQR_DATA) => {
+      const updated = [...prev, newPqr];
+      try {
+        const stored = JSON.parse(localStorage.getItem("wqms_pqr_main_register") || "[]");
+        stored.push(newPqr);
+        localStorage.setItem("wqms_pqr_main_register", JSON.stringify(stored));
+      } catch {}
+      return updated;
+    });
+    setPqrUploading(false);
+    setPqrSuccess(true);
+    setTimeout(() => { setPqrSuccess(false); setCreatingPqr(false); setPqrForm({ wpsRef: "", testDate: new Date().toISOString().split("T")[0], testLab: "", standard: "ISO 15614-1", tests: [], result: "PASS" }); setPqrFile(null); }, 1500);
+  };
 
   useEffect(() => {
     try {
@@ -142,6 +190,9 @@ export const WPSModule: React.FC = () => {
                   <div style={{ textAlign: "right" }}>
                     <div style={{ color: D.textSoft, fontSize: 11 }}>{w.standard}</div>
                     <div style={{ color: D.textSoft, fontSize: 11, marginTop: 2 }}>t: {w.thicknessRange}</div>
+                    {w.documentUrl && (
+                      <div style={{ marginTop: 5, background: D.accentFaint, border: `1px solid ${D.accentBorder}`, borderRadius: 4, padding: "2px 7px", fontSize: 10, color: D.accent, fontWeight: 600 }}>📄 Document</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -345,8 +396,11 @@ export const WPSModule: React.FC = () => {
         </div>
       )}
 
-      {tab === "pqr" && (
+      {tab === "pqr" && !creatingPqr && (
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <Button onClick={() => setCreatingPqr(true)}>+ Create PQR</Button>
+          </div>
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10, boxShadow: D.shadow }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
@@ -355,20 +409,14 @@ export const WPSModule: React.FC = () => {
                 ))}</tr>
               </thead>
               <tbody>
-                {((): typeof PQR_DATA => {
-                  try {
-                    const stored = JSON.parse(localStorage.getItem("wqms_pqr_main_register") || "[]");
-                    const ids = new Set(stored.map((p: {id:string}) => p.id));
-                    return [...stored, ...PQR_DATA.filter(p => !ids.has(p.id))];
-                  } catch { return PQR_DATA; }
-                })().map((p, i) => (
+                {pqrList.map((p: any, i: number) => (
                   <tr key={p.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                     <td style={{ padding: "10px 12px", color: D.accent, fontFamily: "'DM Mono',monospace", fontWeight: 700, fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.id}</td>
                     <td style={{ padding: "10px 12px", color: "#6ea4f0", fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.wpsRef}</td>
                     <td style={{ padding: "10px 12px", color: D.textMid, fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.testDate}</td>
                     <td style={{ padding: "10px 12px", color: D.textMid, fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.testLab}</td>
                     <td style={{ padding: "10px 12px", color: D.textMid, fontSize: 12, borderBottom: `1px solid ${D.borderSoft}` }}>{p.standard}</td>
-                    <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}><div style={{ display: "flex", flexWrap: "wrap" }}>{p.tests.map(t => <Tag key={t} label={t} kind="green" />)}</div></td>
+                    <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}><div style={{ display: "flex", flexWrap: "wrap" }}>{p.tests.map((t: string) => <Tag key={t} label={t} kind="green" />)}</div></td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}><Tag label={p.result} kind="green" /></td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${D.borderSoft}` }}>
                       {p.documentUrl
@@ -379,6 +427,47 @@ export const WPSModule: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "pqr" && creatingPqr && (
+        <div style={{ flex: 1, overflowY: "auto", padding: 20, maxWidth: 640 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+            <div style={{ color: D.text, fontWeight: 700, fontSize: 16 }}>Create New PQR</div>
+            <Button outline onClick={() => setCreatingPqr(false)}>← Back</Button>
+          </div>
+          {pqrSuccess && <div style={{ background: D.passBg, border: `1px solid ${D.passBorder}`, borderRadius: 7, padding: "10px 14px", color: D.pass, fontSize: 13, fontWeight: 600, marginBottom: 18 }}>PQR saved to register.</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><Label c="WPS Reference" req /><input value={pqrForm.wpsRef} onChange={e => setPqrForm(f => ({ ...f, wpsRef: e.target.value }))} placeholder="e.g. WPS-001" style={inp} /></div>
+              <div><Label c="Test Date" /><input type="date" value={pqrForm.testDate} onChange={e => setPqrForm(f => ({ ...f, testDate: e.target.value }))} style={{ ...inp, colorScheme: "dark" }} /></div>
+              <div><Label c="Test Laboratory" req /><input value={pqrForm.testLab} onChange={e => setPqrForm(f => ({ ...f, testLab: e.target.value }))} placeholder="e.g. NATA Lab" style={inp} /></div>
+              <div><Label c="Standard" /><select value={pqrForm.standard} onChange={e => setPqrForm(f => ({ ...f, standard: e.target.value }))} style={inp}>{STANDARDS.map(s => <option key={s}>{s}</option>)}</select></div>
+              <div><Label c="Result" /><select value={pqrForm.result} onChange={e => setPqrForm(f => ({ ...f, result: e.target.value }))} style={inp}><option>PASS</option><option>FAIL</option></select></div>
+            </div>
+            <div>
+              <Label c="Tests Performed" />
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {TEST_TYPES.map(t => {
+                  const active = pqrForm.tests.includes(t);
+                  return <button key={t} onClick={() => setPqrForm(f => ({ ...f, tests: active ? f.tests.filter(x => x !== t) : [...f.tests, t] }))} style={{ background: active ? D.accentFaint : D.surfaceAlt, border: `1px solid ${active ? D.accentBorder : D.border}`, color: active ? D.accent : D.textMid, borderRadius: 5, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{t}</button>;
+                })}
+              </div>
+            </div>
+            <div>
+              <Label c="Attach Document (PDF, Excel, JPEG)" />
+              <div onClick={() => pqrFileRef.current?.click()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setPqrFile(f); }} onDragOver={e => e.preventDefault()}
+                style={{ border: `2px dashed ${pqrFile ? D.accentBorder : D.border}`, borderRadius: 7, padding: "12px 14px", cursor: "pointer", background: pqrFile ? D.accentFaint : D.surfaceAlt, textAlign: "center" }}>
+                {pqrFile ? <span style={{ color: D.accent, fontSize: 12, fontWeight: 600 }}>{pqrFile.name}</span> : <span style={{ color: D.textSoft, fontSize: 12 }}>Drop file here or click to browse</span>}
+                <input ref={pqrFileRef} type="file" accept=".pdf,.xlsx,.xls,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={e => e.target.files?.[0] && setPqrFile(e.target.files[0])} />
+              </div>
+              {pqrFile && <button onClick={() => setPqrFile(null)} style={{ marginTop: 4, background: "none", border: "none", color: D.fail, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>Remove file</button>}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <Button color={D.accent} onClick={handlePqrSubmit} disabled={pqrUploading || !pqrForm.wpsRef || !pqrForm.testLab} style={{ minWidth: 140 }}>{pqrUploading ? "Saving…" : "Create PQR"}</Button>
+              <Button outline onClick={() => setCreatingPqr(false)}>Cancel</Button>
+            </div>
           </div>
         </div>
       )}
