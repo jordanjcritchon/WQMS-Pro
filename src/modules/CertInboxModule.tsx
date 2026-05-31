@@ -83,6 +83,14 @@ const TypeBadge: React.FC<{ t: string | null }> = ({ t }) => {
   return <span style={{ background: bg, color: c, borderRadius: 99, padding: "2px 8px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{label}</span>;
 };
 
+const DeleteBtn: React.FC<{ onClick: () => void }> = ({ onClick }) => (
+  <button onClick={e => { e.stopPropagation(); onClick(); }} style={{
+    background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail,
+    borderRadius: 5, padding: "3px 8px", fontSize: 11, fontWeight: 600,
+    cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+  }}>Delete</button>
+);
+
 const th: React.CSSProperties = {
   color: D.textSoft, fontWeight: 600, fontSize: 11, textAlign: "left",
   padding: "9px 12px", borderBottom: `1px solid ${D.border}`,
@@ -208,6 +216,13 @@ export const CertInboxModule: React.FC = () => {
     }
   }, []);
 
+  const deleteCert = useCallback(async (table: string, id: string) => {
+    if (!supabase) return;
+    if (!window.confirm("Delete this record? This cannot be undone.")) return;
+    await supabase.from(table).delete().eq("id", id);
+    load();
+  }, [load]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     const t = setInterval(load, 30_000);
@@ -242,9 +257,9 @@ export const CertInboxModule: React.FC = () => {
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
-              <thead><tr>{["Cert Ref","Heat No","Grade","Standard","Supplier","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Cert Ref","Heat No","Grade","Standard","Supplier","Test Date","Document",""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
-                {material.length === 0 ? <EmptyRow cols={7} msg="No material certs yet — send a mill cert to wqmscerts@gmail.com" /> :
+                {material.length === 0 ? <EmptyRow cols={8} msg="No material certs yet — send a mill cert to wqmscerts@gmail.com" /> :
                   material.map((r, i) => (
                     <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                       <td style={td({ color: D.accent, fontWeight: 600 })}>{r.cert_ref || "—"}</td>
@@ -254,6 +269,7 @@ export const CertInboxModule: React.FC = () => {
                       <td style={td()}>{r.supplier || "—"}</td>
                       <td style={td()}>{fmt(r.test_date)}</td>
                       <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                      <td style={td()}><DeleteBtn onClick={() => deleteCert("material_cert_register", r.id)} /></td>
                     </tr>
                   ))}
               </tbody>
@@ -267,9 +283,9 @@ export const CertInboxModule: React.FC = () => {
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
-              <thead><tr>{["Cert Ref","Classification","Manufacturer","Batch No","Standard","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Cert Ref","Classification","Manufacturer","Batch No","Standard","Test Date","Document",""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
-                {consumable.length === 0 ? <EmptyRow cols={7} msg="No consumable certs yet — send an electrode/filler cert to wqmscerts@gmail.com" /> :
+                {consumable.length === 0 ? <EmptyRow cols={8} msg="No consumable certs yet — send an electrode/filler cert to wqmscerts@gmail.com" /> :
                   consumable.map((r, i) => (
                     <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                       <td style={td({ color: D.accent, fontWeight: 600 })}>{r.cert_ref || "—"}</td>
@@ -279,6 +295,7 @@ export const CertInboxModule: React.FC = () => {
                       <td style={td()}>{r.standard || "—"}</td>
                       <td style={td()}>{fmt(r.test_date)}</td>
                       <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                      <td style={td()}><DeleteBtn onClick={() => deleteCert("consumable_cert_register", r.id)} /></td>
                     </tr>
                   ))}
               </tbody>
@@ -292,9 +309,9 @@ export const CertInboxModule: React.FC = () => {
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
-              <thead><tr>{["Report No","Method","Weld ID","Technician","Standard","Result","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Report No","Method","Weld ID","Technician","Standard","Result","Test Date","Document",""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
-                {ndt.length === 0 ? <EmptyRow cols={8} msg="No NDT reports yet — send an RT/UT/MT/PT report to wqmscerts@gmail.com" /> :
+                {ndt.length === 0 ? <EmptyRow cols={9} msg="No NDT reports yet — send an RT/UT/MT/PT report to wqmscerts@gmail.com" /> :
                   ndt.map((r, i) => (
                     <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                       <td style={td({ color: D.accent, fontWeight: 600 })}>{r.report_no || "—"}</td>
@@ -305,6 +322,7 @@ export const CertInboxModule: React.FC = () => {
                       <td style={td()}><ResultBadge v={r.result} /></td>
                       <td style={td()}>{fmt(r.test_date)}</td>
                       <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                      <td style={td()}><DeleteBtn onClick={() => deleteCert("ndt_report_register", r.id)} /></td>
                     </tr>
                   ))}
               </tbody>
@@ -318,9 +336,9 @@ export const CertInboxModule: React.FC = () => {
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
-              <thead><tr>{["Report No","HT Type","Component","Weld ID","Target Temp","Soak Time","Result","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Report No","HT Type","Component","Weld ID","Target Temp","Soak Time","Result","Test Date","Document",""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
-                {ht.length === 0 ? <EmptyRow cols={9} msg="No heat treatment reports yet — send a PWHT record to wqmscerts@gmail.com" /> :
+                {ht.length === 0 ? <EmptyRow cols={10} msg="No heat treatment reports yet — send a PWHT record to wqmscerts@gmail.com" /> :
                   ht.map((r, i) => (
                     <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                       <td style={td({ color: D.accent, fontWeight: 600 })}>{r.report_no || "—"}</td>
@@ -332,6 +350,7 @@ export const CertInboxModule: React.FC = () => {
                       <td style={td()}><ResultBadge v={r.result} /></td>
                       <td style={td()}>{fmt(r.test_date)}</td>
                       <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                      <td style={td()}><DeleteBtn onClick={() => deleteCert("ht_report_register", r.id)} /></td>
                     </tr>
                   ))}
               </tbody>
@@ -345,9 +364,9 @@ export const CertInboxModule: React.FC = () => {
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
-              <thead><tr>{["Cert No","Welder","Stamp No","Standard","Process","Test Date","Expiry","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Cert No","Welder","Stamp No","Standard","Process","Test Date","Expiry","Document",""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
-                {welder.length === 0 ? <EmptyRow cols={8} msg="No welder certs yet — send a welder qualification cert to wqmscerts@gmail.com" /> :
+                {welder.length === 0 ? <EmptyRow cols={9} msg="No welder certs yet — send a welder qualification cert to wqmscerts@gmail.com" /> :
                   welder.map((r, i) => (
                     <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
                       <td style={td({ color: D.accent, fontWeight: 600 })}>{r.cert_no || "—"}</td>
@@ -358,6 +377,7 @@ export const CertInboxModule: React.FC = () => {
                       <td style={td()}>{fmt(r.test_date)}</td>
                       <td style={td()}>{fmt(r.expiry_date)}</td>
                       <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                      <td style={td()}><DeleteBtn onClick={() => deleteCert("welder_cert_register", r.id)} /></td>
                     </tr>
                   ))}
               </tbody>
