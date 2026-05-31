@@ -78,16 +78,21 @@ async function extractCertData(base64Data, mimeType) {
 
   const msg = await anthropic.messages.create({
     model:      "claude-opus-4-7",
-    max_tokens: 4096,
+    max_tokens: 8192,
     messages: [{
       role:    "user",
       content: [
         contentBlock,
-        { type: "text", text: `You are a welding QA document specialist. Carefully read the ENTIRE document — it may contain multiple certificates or reports on separate pages or sections.
+        { type: "text", text: `You are a welding QA document specialist. Read EVERY PAGE of this document thoroughly.
 
-Return ONLY valid JSON — no markdown, no explanation.
+CRITICAL INSTRUCTION: Many PDFs contain multiple certificates — one per page or section. You MUST extract EVERY certificate separately. Missing a certificate is a serious QA failure.
 
-Classify each document/certificate found as one of:
+Steps:
+1. Count how many distinct certificates or reports are in this document
+2. Extract ALL of them — one JSON object per certificate
+3. Return a JSON ARRAY — always an array, even if only one cert found
+
+Classify each as one of:
 - material       (material test certificate / mill cert)
 - consumable     (electrode / filler wire / flux cert)
 - ndt            (NDT report: RT, UT, MT, PT, VT)
@@ -96,13 +101,11 @@ Classify each document/certificate found as one of:
 - wps            (welding procedure specification)
 - other
 
-IMPORTANT: If the document contains multiple separate certificates or reports, return a JSON ARRAY with one object per certificate. If it contains only one certificate, return a JSON ARRAY with one object.
-
-Each object must follow this exact structure (leave unknown fields as empty string or null):
+Each object in the array must use this exact structure (empty string or null for unknown fields):
 ${CERT_SCHEMA}
 
-For NDT result use PASS or FAIL only.
-Do not miss any certificate — check every page thoroughly.` },
+Return ONLY the JSON array — no markdown, no explanation, no preamble.
+For NDT result use PASS or FAIL only.` },
       ],
     }],
   });
