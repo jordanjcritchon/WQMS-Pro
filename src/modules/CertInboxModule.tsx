@@ -109,7 +109,7 @@ const EmptyRow: React.FC<{ cols: number; msg: string }> = ({ cols, msg }) => (
 
 // ── Monitor tab ───────────────────────────────────────────────────────────────
 
-const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: Date | null; onRefresh: () => void; onClearProcessed: () => void }> = ({ emails, loading, lastPoll, onRefresh, onClearProcessed }) => (
+const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: Date | null; onRefresh: () => void; onClearProcessed: () => void; onClearAll: () => void }> = ({ emails, loading, lastPoll, onRefresh, onClearProcessed, onClearAll }) => (
   <div style={{ padding: 20, flex: 1, overflowY: "auto" }}>
     {/* Status bar */}
     <Card s={{ padding: "14px 20px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -129,6 +129,10 @@ const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: D
           background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail,
           borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
         }}>Clear Processed</button>
+        <button onClick={onClearAll} style={{
+          background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail,
+          borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+        }}>Clear All</button>
         <button onClick={onRefresh} disabled={loading} style={{
           background: D.accentFaint, border: `1px solid ${D.accentBorder}`, color: D.accent,
           borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
@@ -222,8 +226,15 @@ export const CertInboxModule: React.FC = () => {
 
   const clearProcessed = useCallback(async () => {
     if (!supabase) return;
-    if (!window.confirm("Remove all processed emails from the feed? This only clears the feed — extracted cert data in the registers is kept.")) return;
+    if (!window.confirm("Remove all processed emails from the feed? Extracted cert data in the registers is kept.")) return;
     await supabase.from("cert_inbox").delete().eq("extracted", true);
+    load();
+  }, [load]);
+
+  const clearAll = useCallback(async () => {
+    if (!supabase) return;
+    if (!window.confirm("Clear the entire email feed? Extracted cert data in the registers is kept — only the feed log is cleared.")) return;
+    await supabase.from("cert_inbox").delete().neq("id", "00000000-0000-0000-0000-000000000000");
     load();
   }, [load]);
 
@@ -260,7 +271,7 @@ export const CertInboxModule: React.FC = () => {
 
       {/* Monitor */}
       {tab === "monitor" && (
-        <MonitorTab emails={emails} loading={loading} lastPoll={lastPoll} onRefresh={load} onClearProcessed={clearProcessed} />
+        <MonitorTab emails={emails} loading={loading} lastPoll={lastPoll} onRefresh={load} onClearProcessed={clearProcessed} onClearAll={clearAll} />
       )}
 
       {/* Material Certs */}
