@@ -1,520 +1,367 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { D, inp } from "../theme";
-import { Card, TabBar, Button } from "../components";
-import { usePersistedState } from "../hooks/usePersistedState";
+import { Card, TabBar } from "../components";
+import { supabase } from "../lib/supabase";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type CertType = "material" | "consumable" | "ndt" | "ht" | "other";
 
-interface Cert {
-  id:          string;
-  type:        CertType;
-  filename:    string;
-  uploadedAt:  string;
-  jobNo:       string;
-  // material
-  heatNumber?:     string;
-  materialGrade?:  string;
-  standard?:       string;
-  supplier?:       string;
-  dateReceived?:   string;
-  linkedWeld?:     string;
-  // consumable
-  productName?:    string;
-  batchNumber?:    string;
-  // ndt
-  weldId?:         string;
-  process?:        string;
-  wpsRef?:         string;
-  result?:         string;
-  inspector?:      string;
-  reportDate?:     string;
-  // ht
-  temperature?:    string;
-  duration?:       string;
-  // note
-  notes?:          string;
+interface InboxEmail {
+  id: string;
+  gmail_message_id: string;
+  from_email: string;
+  from_name: string;
+  subject: string;
+  received_at: string;
+  attachment_count: number;
+  extracted: boolean;
+  cert_type: string | null;
+  processing_error: string | null;
 }
 
-// ── Claude call ───────────────────────────────────────────────────────────────
-const ANTHROPIC_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-  ? "/api/anthropic/v1/messages"
-  : "https://api.anthropic.com/v1/messages";
+interface MaterialCert {
+  id: string; inbox_id: string; cert_ref: string; heat_no: string;
+  grade: string; standard: string; supplier: string; test_date: string;
+  item_size: string; cev: number | null; document_url: string;
+}
 
-async function classifyCert(b64: string, mime: string, apiKey: string): Promise<Partial<Cert>> {
-  const block = mime.startsWith("image/")
-    ? { type: "image",    source: { type: "base64", media_type: mime, data: b64 } }
-    : { type: "document", source: { type: "base64", media_type: mime, data: b64 } };
+interface ConsumableCert {
+  id: string; inbox_id: string; cert_ref: string; classification: string;
+  manufacturer: string; batch_no: string; standard: string; test_date: string;
+  document_url: string;
+}
 
-  const r = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
-      system: `You are a welding QA document specialist. Classify and extract key fields from certificates and reports. Return ONLY strict JSON — no markdown, no preamble.
+interface NDTReport {
+  id: string; inbox_id: string; report_no: string; method: string;
+  weld_id: string; technician: string; cert_level: string; standard: string;
+  result: string; test_date: string; document_url: string;
+}
 
-Certificate types:
-- material: material test certificate / mill cert / material cert
-- consumable: welding consumable cert / filler wire cert / electrode cert
-- ndt: NDT report / radiography / UT / MT / PT report
-- ht: heat treatment record / PWHT report
-- other: anything else
+interface HTReport {
+  id: string; inbox_id: string; report_no: string; ht_type: string;
+  component_id: string; weld_id: string; material: string;
+  target_temp: number | null; soak_time: number | null; actual_temp: number | null;
+  result: string; test_date: string; document_url: string;
+}
 
-Return this JSON:
-{"type":"material|consumable|ndt|ht|other","jobNo":"","heatNumber":"","materialGrade":"","standard":"","supplier":"","dateReceived":"","linkedWeld":"","productName":"","batchNumber":"","weldId":"","process":"","wpsRef":"","result":"","inspector":"","reportDate":"","temperature":"","duration":"","notes":""}
-
-Leave unknown fields as empty string. For result on NDT: PASS or FAIL only.`,
-      messages: [{ role: "user", content: [block, { type: "text", text: "Classify this document and extract all available fields." }] }],
-    }),
-  });
-  if (!r.ok) {
-    const body = await r.text();
-    const err = new Error(`API ${r.status}: ${body}`) as Error & { status: number };
-    err.status = r.status;
-    throw err;
-  }
-  const text = (await r.json()).content[0].text.trim()
-    .replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-  return JSON.parse(text);
+interface WelderCert {
+  id: string; inbox_id: string; cert_no: string; welder_name: string;
+  stamp_no: string; standard: string; process: string; material_group: string;
+  positions: string[]; test_date: string; expiry_date: string; test_lab: string;
+  document_url: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const uid = () => `cert-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-const APIKEY_KEY = "wqms_api_key";
+const fmt = (d: string | null) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
+const ago = (d: string) => {
+  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
 
 const ResultBadge: React.FC<{ v?: string }> = ({ v }) => {
   if (!v) return <span style={{ color: D.textSoft }}>—</span>;
-  const pass = /pass/i.test(v);
-  const fail = /fail/i.test(v);
+  const pass = /pass/i.test(v), fail = /fail/i.test(v);
   const c = pass ? D.pass : fail ? D.fail : D.warn;
   const bg = pass ? D.passBg : fail ? D.failBg : D.warnBg;
-  const b = pass ? D.passBorder : fail ? D.failBorder : D.warnBorder;
-  return <span style={{ background: bg, color: c, border: `1px solid ${b}`, borderRadius: 99, padding: "2px 9px", fontSize: 11, fontWeight: 700 }}>{v}</span>;
+  return <span style={{ background: bg, color: c, borderRadius: 99, padding: "2px 9px", fontSize: 11, fontWeight: 700 }}>{v}</span>;
 };
 
-const TypeBadge: React.FC<{ t: CertType }> = ({ t }) => {
-  const cfg: Record<CertType, [string, string, string]> = {
-    material:   [D.blue,   "rgba(59,130,246,0.1)",  "Material Cert"],
-    consumable: [D.accent, D.accentFaint,            "Consumable Cert"],
-    ndt:        [D.warn,   D.warnBg,                 "NDT Report"],
-    ht:         [D.purple, "rgba(139,92,246,0.1)",   "Heat Treatment"],
-    other:      [D.textMid,"rgba(120,120,140,0.1)",  "Other"],
+const TypeBadge: React.FC<{ t: string | null }> = ({ t }) => {
+  const map: Record<string, [string, string, string]> = {
+    material:       [D.blue,   "rgba(59,130,246,0.12)",  "Material Cert"],
+    consumable:     [D.accent, D.accentFaint,             "Consumable Cert"],
+    ndt:            [D.warn,   D.warnBg,                  "NDT Report"],
+    heat_treatment: [D.purple, "rgba(139,92,246,0.12)",   "Heat Treatment"],
+    welder_qual:    [D.pass,   D.passBg,                  "Welder Cert"],
+    wps:            [D.textMid,"rgba(120,120,140,0.12)",  "WPS"],
+    other:          [D.textMid,"rgba(120,120,140,0.12)",  "Other"],
   };
-  const [c, bg, label] = cfg[t] ?? cfg.other;
-  return <span style={{ background: bg, color: c, borderRadius: 99, padding: "2px 9px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{label}</span>;
+  const [c, bg, label] = map[t ?? "other"] ?? map.other;
+  return <span style={{ background: bg, color: c, borderRadius: 99, padding: "2px 8px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{label}</span>;
 };
 
-const TH: React.FC<{ c: string }> = ({ c }) => (
-  <th style={{ color: D.textSoft, fontWeight: 600, fontSize: 11, textAlign: "left", padding: "9px 12px", borderBottom: `1px solid ${D.border}`, background: D.surfaceAlt, whiteSpace: "nowrap" }}>{c}</th>
+const th: React.CSSProperties = {
+  color: D.textSoft, fontWeight: 600, fontSize: 11, textAlign: "left",
+  padding: "9px 12px", borderBottom: `1px solid ${D.border}`,
+  background: D.surfaceAlt, whiteSpace: "nowrap",
+};
+const td = (extra?: React.CSSProperties): React.CSSProperties => ({
+  padding: "9px 12px", color: D.textMid, fontSize: 12,
+  borderBottom: `1px solid ${D.borderSoft}`, maxWidth: 180,
+  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+  ...extra,
+});
+
+const EmptyRow: React.FC<{ cols: number; msg: string }> = ({ cols, msg }) => (
+  <tr><td colSpan={cols} style={{ padding: 40, textAlign: "center", color: D.textSoft, fontSize: 13 }}>{msg}</td></tr>
 );
 
-// ── Upload card ───────────────────────────────────────────────────────────────
-interface UploadCardProps {
-  apiKey: string;
-  onSaved: (cert: Cert) => void;
-}
+// ── Monitor tab ───────────────────────────────────────────────────────────────
 
-function UploadCard({ apiKey, onSaved }: UploadCardProps) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [loading,   setLoading]   = useState(false);
-  const [preview,   setPreview]   = useState<Cert | null>(null);
-  const [filename,  setFilename]  = useState("");
-  const [err,       setErr]       = useState("");
-  const [authErr,   setAuthErr]   = useState(false);
+const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: Date | null; onRefresh: () => void }> = ({ emails, loading, lastPoll, onRefresh }) => (
+  <div style={{ padding: 20, flex: 1, overflowY: "auto" }}>
+    {/* Status bar */}
+    <Card s={{ padding: "14px 20px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ position: "relative", width: 12, height: 12 }}>
+          <div style={{ width: 12, height: 12, borderRadius: "50%", background: D.pass, position: "absolute" }} />
+          <div style={{ width: 12, height: 12, borderRadius: "50%", background: D.pass, position: "absolute", opacity: 0.4, animation: "pulse 2s ease-in-out infinite" }} />
+        </div>
+        <div>
+          <div style={{ color: D.text, fontWeight: 700, fontSize: 13 }}>Live Monitoring</div>
+          <div style={{ color: D.textSoft, fontSize: 11 }}>wqmscerts@gmail.com · polling every 2 minutes</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {lastPoll && <span style={{ color: D.textSoft, fontSize: 11 }}>Last checked {ago(lastPoll.toISOString())}</span>}
+        <button onClick={onRefresh} disabled={loading} style={{
+          background: D.accentFaint, border: `1px solid ${D.accentBorder}`, color: D.accent,
+          borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+        }}>{loading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+    </Card>
 
-  const handleFile = useCallback(async (file: File) => {
-    if (!apiKey) { setErr("No API key — go back to the main app and enter your API key first."); return; }
-    setErr(""); setAuthErr(false); setLoading(true); setPreview(null);
+    {/* Stats row */}
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+      {[
+        ["Total Received", emails.length],
+        ["Processed", emails.filter(e => e.extracted).length],
+        ["With Attachments", emails.filter(e => e.attachment_count > 0).length],
+        ["Errors", emails.filter(e => e.processing_error).length],
+      ].map(([label, val]) => (
+        <Card key={String(label)} s={{ padding: "12px 16px", textAlign: "center" }}>
+          <div style={{ color: D.text, fontWeight: 700, fontSize: 22 }}>{val}</div>
+          <div style={{ color: D.textSoft, fontSize: 11, marginTop: 2 }}>{label}</div>
+        </Card>
+      ))}
+    </div>
+
+    {/* Email feed */}
+    <Card s={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${D.border}`, color: D.textSoft, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".07em" }}>
+        Email Feed
+      </div>
+      {emails.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", color: D.textSoft, fontSize: 13 }}>
+          No emails received yet — send a cert PDF to wqmscerts@gmail.com
+        </div>
+      ) : (
+        emails.map(e => (
+          <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderBottom: `1px solid ${D.borderSoft}` }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: e.processing_error ? D.fail : e.extracted ? D.pass : e.attachment_count > 0 ? D.warn : D.border }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: D.text, fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.subject || "(no subject)"}</div>
+              <div style={{ color: D.textSoft, fontSize: 11, marginTop: 2 }}>
+                From: {e.from_name || e.from_email} · {e.attachment_count} attachment{e.attachment_count !== 1 ? "s" : ""}
+              </div>
+              {e.processing_error && <div style={{ color: D.fail, fontSize: 11, marginTop: 2 }}>Error: {e.processing_error}</div>}
+            </div>
+            <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+              {e.cert_type && <TypeBadge t={e.cert_type} />}
+              <span style={{ color: D.textSoft, fontSize: 11 }}>{ago(e.received_at)}</span>
+            </div>
+          </div>
+        ))
+      )}
+    </Card>
+  </div>
+);
+
+// ── Main module ───────────────────────────────────────────────────────────────
+
+export const CertInboxModule: React.FC = () => {
+  const [tab, setTab] = useState("monitor");
+  const [loading, setLoading] = useState(false);
+  const [lastPoll, setLastPoll] = useState<Date | null>(null);
+
+  const [emails, setEmails]       = useState<InboxEmail[]>([]);
+  const [material, setMaterial]   = useState<MaterialCert[]>([]);
+  const [consumable, setConsumable] = useState<ConsumableCert[]>([]);
+  const [ndt, setNdt]             = useState<NDTReport[]>([]);
+  const [ht, setHt]               = useState<HTReport[]>([]);
+  const [welder, setWelder]       = useState<WelderCert[]>([]);
+
+  const load = useCallback(async () => {
+    if (!supabase) return;
+    setLoading(true);
     try {
-      const b64: string = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload = e => res((e.target!.result as string).split(",")[1]);
-        reader.onerror = rej;
-        reader.readAsDataURL(file);
-      });
-      const extracted = await classifyCert(b64, file.type, apiKey);
-      setFilename(file.name);
-      setPreview({
-        id:         uid(),
-        type:       (extracted.type as CertType) ?? "other",
-        filename:   file.name,
-        uploadedAt: new Date().toISOString(),
-        jobNo:      extracted.jobNo      ?? "",
-        heatNumber:    extracted.heatNumber    ?? "",
-        materialGrade: extracted.materialGrade ?? "",
-        standard:      extracted.standard      ?? "",
-        supplier:      extracted.supplier      ?? "",
-        dateReceived:  extracted.dateReceived  ?? "",
-        linkedWeld:    extracted.linkedWeld    ?? "",
-        productName:   extracted.productName   ?? "",
-        batchNumber:   extracted.batchNumber   ?? "",
-        weldId:        extracted.weldId        ?? "",
-        process:       extracted.process       ?? "",
-        wpsRef:        extracted.wpsRef        ?? "",
-        result:        extracted.result        ?? "",
-        inspector:     extracted.inspector     ?? "",
-        reportDate:    extracted.reportDate    ?? "",
-        temperature:   extracted.temperature   ?? "",
-        duration:      extracted.duration      ?? "",
-        notes:         extracted.notes         ?? "",
-      });
-    } catch (e: any) {
-      if (e.status === 401) {
-        setAuthErr(true);
-        setErr("Invalid API key — your key was rejected by Anthropic.");
-      } else {
-        setErr("Extraction failed: " + e.message);
-      }
+      const [inboxRes, matRes, conRes, ndtRes, htRes, welRes] = await Promise.all([
+        supabase.from("cert_inbox").select("*").order("received_at", { ascending: false }).limit(50),
+        supabase.from("material_cert_register").select("*").order("created_at", { ascending: false }),
+        supabase.from("consumable_cert_register").select("*").order("created_at", { ascending: false }),
+        supabase.from("ndt_report_register").select("*").order("created_at", { ascending: false }),
+        supabase.from("ht_report_register").select("*").order("created_at", { ascending: false }),
+        supabase.from("welder_cert_register").select("*").order("created_at", { ascending: false }),
+      ]);
+      if (inboxRes.data) setEmails(inboxRes.data);
+      if (matRes.data)   setMaterial(matRes.data);
+      if (conRes.data)   setConsumable(conRes.data);
+      if (ndtRes.data)   setNdt(ndtRes.data);
+      if (htRes.data)    setHt(htRes.data);
+      if (welRes.data)   setWelder(welRes.data);
+      setLastPoll(new Date());
     } finally {
       setLoading(false);
     }
-  }, [apiKey]);
+  }, []);
 
-  const save = () => {
-    if (!preview) return;
-    onSaved(preview);
-    setPreview(null);
-    setFilename("");
-    if (fileRef.current) fileRef.current.value = "";
-  };
-
-  const field = (label: string, key: keyof Cert) => (
-    <div key={key}>
-      <div style={{ color: D.textSoft, fontSize: 10, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>{label}</div>
-      <input
-        value={(preview?.[key] as string) ?? ""}
-        onChange={e => setPreview(p => p ? { ...p, [key]: e.target.value } : p)}
-        style={{ ...inp, fontSize: 13, padding: "7px 10px" }}
-      />
-    </div>
-  );
-
-  return (
-    <Card s={{ padding: 24, marginBottom: 16 }}>
-      <div style={{ color: D.text, fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Upload Certificate or Report</div>
-      <div style={{ color: D.textSoft, fontSize: 12, marginBottom: 16 }}>
-        AI reads the document and extracts all key fields automatically. Review and save to the register.
-      </div>
-
-      {err && (
-        <div style={{ background: D.failBg, border: `1px solid ${D.failBorder}`, borderRadius: 7, padding: "10px 14px", color: D.fail, fontSize: 12, marginBottom: 12 }}>
-          {err}
-          {authErr && (
-            <div style={{ marginTop: 8 }}>
-              <button
-                onClick={() => { localStorage.removeItem("wqms_api_key"); window.location.reload(); }}
-                style={{ background: D.fail, border: "none", color: "#fff", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'Inter',sans-serif" }}
-              >
-                Reset API Key
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {!preview && !loading && (
-        <div
-          onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-          onDragOver={e => e.preventDefault()}
-          onClick={() => fileRef.current?.click()}
-          style={{
-            border: `2px dashed ${D.accentBorder}`, borderRadius: 10,
-            padding: "36px 24px", textAlign: "center", cursor: "pointer",
-            background: D.accentFaint,
-          }}
-        >
-          <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
-          <div style={{ color: D.text, fontWeight: 600, marginBottom: 4 }}>Drop cert here or tap to upload</div>
-          <div style={{ color: D.textMid, fontSize: 12 }}>PDF, JPG, or PNG — AI auto-classifies and extracts fields</div>
-          <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }}
-            onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
-        </div>
-      )}
-
-      {loading && (
-        <div style={{ textAlign: "center", padding: 40, color: D.textMid, fontSize: 13 }}>
-          <div style={{ width: 24, height: 24, border: `2px solid ${D.border}`, borderTopColor: D.accent, borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 12px" }}/>
-          Extracting fields with AI…
-        </div>
-      )}
-
-      {preview && (
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div>
-              <div style={{ color: D.text, fontWeight: 700, fontSize: 14 }}>{filename}</div>
-              <div style={{ marginTop: 4 }}><TypeBadge t={preview.type} /></div>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <select
-                value={preview.type}
-                onChange={e => setPreview(p => p ? { ...p, type: e.target.value as CertType } : p)}
-                style={{ ...inp, width: "auto", fontSize: 12, padding: "6px 28px 6px 10px" }}
-              >
-                <option value="material">Material Cert</option>
-                <option value="consumable">Consumable Cert</option>
-                <option value="ndt">NDT Report</option>
-                <option value="ht">Heat Treatment</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-            {field("Job No.",        "jobNo")}
-            {field("Date Received",  "dateReceived")}
-
-            {(preview.type === "material") && <>
-              {field("Heat Number",   "heatNumber")}
-              {field("Material Grade","materialGrade")}
-              {field("Standard",      "standard")}
-              {field("Supplier",      "supplier")}
-              {field("Linked Weld",   "linkedWeld")}
-            </>}
-
-            {preview.type === "consumable" && <>
-              {field("Product Name",  "productName")}
-              {field("Batch Number",  "batchNumber")}
-              {field("Standard",      "standard")}
-              {field("Supplier",      "supplier")}
-            </>}
-
-            {preview.type === "ndt" && <>
-              {field("Weld ID",       "weldId")}
-              {field("NDT Process",   "process")}
-              {field("WPS Ref",       "wpsRef")}
-              {field("Result",        "result")}
-              {field("Inspector",     "inspector")}
-              {field("Report Date",   "reportDate")}
-              {field("Standard",      "standard")}
-            </>}
-
-            {preview.type === "ht" && <>
-              {field("Weld ID",       "weldId")}
-              {field("Temperature",   "temperature")}
-              {field("Duration",      "duration")}
-              {field("Result",        "result")}
-              {field("Standard",      "standard")}
-              {field("Report Date",   "reportDate")}
-            </>}
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ color: D.textSoft, fontSize: 10, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>Notes</div>
-            <textarea
-              value={preview.notes ?? ""}
-              onChange={e => setPreview(p => p ? { ...p, notes: e.target.value } : p)}
-              rows={2}
-              style={{ ...inp, resize: "vertical", lineHeight: 1.5, fontSize: 13 }}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <Button color={D.pass} onClick={save} style={{ flex: 1 }}>Save to Register</Button>
-            <Button outline onClick={() => { setPreview(null); setFilename(""); }}>Discard</Button>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// ── Main module ───────────────────────────────────────────────────────────────
-export const CertInboxModule: React.FC = () => {
-  const apiKey = localStorage.getItem(APIKEY_KEY) ?? "";
-  const [certs, setCerts] = usePersistedState<Cert[]>("wqms_certs", []);
-  const [tab,    setTab]   = useState("upload");
-  const [search, setSearch]= useState("");
-  const [detail, setDetail]= useState<Cert | null>(null);
-
-  const add    = (c: Cert) => setCerts(prev => [c, ...prev]);
-  const remove = (id: string) => setCerts(prev => prev.filter(c => c.id !== id));
-
-  const byCerts = (type: CertType) => certs.filter(c => c.type === type);
-  const filtered = (type: CertType) =>
-    byCerts(type).filter(c => !search || JSON.stringify(c).toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [load]);
 
   const tabs: [string, string, number?][] = [
-    ["upload",      "Upload"],
-    ["material",    "Material Certs",    byCerts("material").length   || undefined],
-    ["consumable",  "Consumable Certs",  byCerts("consumable").length || undefined],
-    ["ndt",         "NDT Reports",       byCerts("ndt").length        || undefined],
-    ["ht",          "Heat Treatment",    byCerts("ht").length         || undefined],
-    ["other",       "Other",             byCerts("other").length      || undefined],
+    ["monitor",    "Monitor"],
+    ["material",   "Material Certs",   material.length   || undefined],
+    ["consumable", "Consumable Certs", consumable.length || undefined],
+    ["ndt",        "NDT Reports",      ndt.length        || undefined],
+    ["ht",         "Heat Treatment",   ht.length         || undefined],
+    ["welder",     "Welder Certs",     welder.length     || undefined],
   ];
-
-  const rowStyle = (i: number) => ({
-    background: i % 2 === 0 ? D.surface : "transparent",
-    cursor: "pointer" as const,
-  });
-
-  const tdStyle = {
-    padding: "9px 12px",
-    color: D.textMid,
-    fontSize: 12,
-    borderBottom: `1px solid ${D.borderSoft}`,
-    maxWidth: 160,
-    overflow: "hidden" as const,
-    textOverflow: "ellipsis" as const,
-    whiteSpace: "nowrap" as const,
-  };
-
-  const thStyle = {
-    color: D.textSoft, fontWeight: 600 as const, fontSize: 11,
-    textAlign: "left" as const, padding: "9px 12px",
-    borderBottom: `1px solid ${D.border}`, background: D.surfaceAlt, whiteSpace: "nowrap" as const,
-  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <TabBar tabs={tabs} active={tab} setActive={t => { setTab(t); setDetail(null); setSearch(""); }} />
+      <style>{`
+        @keyframes pulse { 0%,100%{transform:scale(1);opacity:.4} 50%{transform:scale(2.2);opacity:0} }
+        @keyframes spin   { to{transform:rotate(360deg)} }
+      `}</style>
 
-      {/* ── Upload tab ── */}
-      {tab === "upload" && (
-        <div style={{ padding: 20, flex: 1, overflowY: "auto" }}>
-          <UploadCard apiKey={apiKey} onSaved={add} />
+      <TabBar tabs={tabs} active={tab} setActive={t => setTab(t)} />
 
-          {certs.length > 0 && (
-            <Card s={{ padding: 16 }}>
-              <div style={{ color: D.textSoft, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 10 }}>
-                Recently Added
-              </div>
-              {certs.slice(0, 8).map(c => (
-                <div key={c.id}
-                  onClick={() => { setDetail(c); setTab(c.type === "other" ? "other" : c.type); }}
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${D.borderSoft}`, cursor: "pointer" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                    <TypeBadge t={c.type} />
-                    <span style={{ color: D.text, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.filename}</span>
-                  </div>
-                  <span style={{ color: D.textSoft, fontSize: 11, flexShrink: 0, marginLeft: 10 }}>
-                    {new Date(c.uploadedAt).toLocaleDateString()}
-                  </span>
-                </div>
-              ))}
-            </Card>
-          )}
+      {/* Monitor */}
+      {tab === "monitor" && (
+        <MonitorTab emails={emails} loading={loading} lastPoll={lastPoll} onRefresh={load} />
+      )}
+
+      {/* Material Certs */}
+      {tab === "material" && (
+        <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
+          <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+              <thead><tr>{["Cert Ref","Heat No","Grade","Standard","Supplier","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {material.length === 0 ? <EmptyRow cols={7} msg="No material certs yet — send a mill cert to wqmscerts@gmail.com" /> :
+                  material.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
+                      <td style={td({ color: D.accent, fontWeight: 600 })}>{r.cert_ref || "—"}</td>
+                      <td style={td({ fontFamily: "'DM Mono',monospace" })}>{r.heat_no || "—"}</td>
+                      <td style={td()}>{r.grade || "—"}</td>
+                      <td style={td()}>{r.standard || "—"}</td>
+                      <td style={td()}>{r.supplier || "—"}</td>
+                      <td style={td()}>{fmt(r.test_date)}</td>
+                      <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
-      {/* ── Register tabs ── */}
-      {["material", "consumable", "ndt", "ht", "other"].includes(tab) && (
+      {/* Consumable Certs */}
+      {tab === "consumable" && (
         <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
-          {/* Detail panel */}
-          {detail && detail.type === tab && (
-            <Card s={{ padding: 20, marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-                <div>
-                  <div style={{ color: D.text, fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{detail.filename}</div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <TypeBadge t={detail.type} />
-                    <span style={{ color: D.textSoft, fontSize: 11 }}>Uploaded {new Date(detail.uploadedAt).toLocaleString()}</span>
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <Button outline color={D.fail} onClick={() => { remove(detail.id); setDetail(null); }}>Delete</Button>
-                  <Button outline onClick={() => setDetail(null)}>Close</Button>
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {(Object.entries(detail) as [string, string][])
-                  .filter(([k, v]) => !["id","type","filename","uploadedAt"].includes(k) && v)
-                  .map(([k, v]) => (
-                    <div key={k} style={{ background: D.surfaceAlt, border: `1px solid ${D.border}`, borderRadius: 6, padding: "8px 12px" }}>
-                      <div style={{ color: D.textSoft, fontSize: 10, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>
-                        {k.replace(/([A-Z])/g, " $1").trim()}
-                      </div>
-                      <div style={{ color: D.text, fontSize: 13 }}>
-                        {k === "result" ? <ResultBadge v={v} /> : v}
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </Card>
-          )}
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search…" style={{ ...inp, maxWidth: 280 }} />
-            <span style={{ color: D.textSoft, fontSize: 12 }}>{filtered(tab as CertType).length} records</span>
-          </div>
-
           <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
-            {filtered(tab as CertType).length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: D.textSoft, fontSize: 13 }}>
-                No {tab} certificates yet — upload one from the Upload tab.
-              </div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 600 }}>
-                <thead>
-                  <tr>
-                    {tab === "material"   && ["Filename","Heat No.","Grade","Standard","Supplier","Job No.","Date"].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                    {tab === "consumable" && ["Filename","Product","Batch No.","Standard","Supplier","Job No.","Date"].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                    {tab === "ndt"        && ["Filename","Weld ID","Process","WPS Ref","Result","Inspector","Date","Job No."].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                    {tab === "ht"         && ["Filename","Weld ID","Temp","Duration","Result","Standard","Date","Job No."].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                    {tab === "other"      && ["Filename","Job No.","Date","Notes"].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered(tab as CertType).map((c, i) => (
-                    <tr key={c.id} onClick={() => setDetail(detail?.id === c.id ? null : c)} style={rowStyle(i)}>
-                      {tab === "material" && <>
-                        <td style={{ ...tdStyle, color: D.accent, fontWeight: 600 }}>{c.filename}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.heatNumber || "—"}</td>
-                        <td style={tdStyle}>{c.materialGrade || "—"}</td>
-                        <td style={tdStyle}>{c.standard || "—"}</td>
-                        <td style={tdStyle}>{c.supplier || "—"}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.jobNo || "—"}</td>
-                        <td style={tdStyle}>{c.dateReceived || new Date(c.uploadedAt).toLocaleDateString()}</td>
-                      </>}
-                      {tab === "consumable" && <>
-                        <td style={{ ...tdStyle, color: D.accent, fontWeight: 600 }}>{c.filename}</td>
-                        <td style={tdStyle}>{c.productName || "—"}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.batchNumber || "—"}</td>
-                        <td style={tdStyle}>{c.standard || "—"}</td>
-                        <td style={tdStyle}>{c.supplier || "—"}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.jobNo || "—"}</td>
-                        <td style={tdStyle}>{c.dateReceived || new Date(c.uploadedAt).toLocaleDateString()}</td>
-                      </>}
-                      {tab === "ndt" && <>
-                        <td style={{ ...tdStyle, color: D.accent, fontWeight: 600 }}>{c.filename}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.weldId || "—"}</td>
-                        <td style={tdStyle}>{c.process || "—"}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.wpsRef || "—"}</td>
-                        <td style={tdStyle}><ResultBadge v={c.result} /></td>
-                        <td style={tdStyle}>{c.inspector || "—"}</td>
-                        <td style={tdStyle}>{c.reportDate || new Date(c.uploadedAt).toLocaleDateString()}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.jobNo || "—"}</td>
-                      </>}
-                      {tab === "ht" && <>
-                        <td style={{ ...tdStyle, color: D.accent, fontWeight: 600 }}>{c.filename}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.weldId || "—"}</td>
-                        <td style={tdStyle}>{c.temperature || "—"}</td>
-                        <td style={tdStyle}>{c.duration || "—"}</td>
-                        <td style={tdStyle}><ResultBadge v={c.result} /></td>
-                        <td style={tdStyle}>{c.standard || "—"}</td>
-                        <td style={tdStyle}>{c.reportDate || new Date(c.uploadedAt).toLocaleDateString()}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.jobNo || "—"}</td>
-                      </>}
-                      {tab === "other" && <>
-                        <td style={{ ...tdStyle, color: D.accent, fontWeight: 600 }}>{c.filename}</td>
-                        <td style={{ ...tdStyle, fontFamily: "'DM Mono',monospace" }}>{c.jobNo || "—"}</td>
-                        <td style={tdStyle}>{new Date(c.uploadedAt).toLocaleDateString()}</td>
-                        <td style={tdStyle}>{c.notes || "—"}</td>
-                      </>}
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+              <thead><tr>{["Cert Ref","Classification","Manufacturer","Batch No","Standard","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {consumable.length === 0 ? <EmptyRow cols={7} msg="No consumable certs yet — send an electrode/filler cert to wqmscerts@gmail.com" /> :
+                  consumable.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
+                      <td style={td({ color: D.accent, fontWeight: 600 })}>{r.cert_ref || "—"}</td>
+                      <td style={td()}>{r.classification || "—"}</td>
+                      <td style={td()}>{r.manufacturer || "—"}</td>
+                      <td style={td({ fontFamily: "'DM Mono',monospace" })}>{r.batch_no || "—"}</td>
+                      <td style={td()}>{r.standard || "—"}</td>
+                      <td style={td()}>{fmt(r.test_date)}</td>
+                      <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
                     </tr>
                   ))}
-                </tbody>
-              </table>
-            )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* NDT Reports */}
+      {tab === "ndt" && (
+        <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
+          <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+              <thead><tr>{["Report No","Method","Weld ID","Technician","Standard","Result","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {ndt.length === 0 ? <EmptyRow cols={8} msg="No NDT reports yet — send an RT/UT/MT/PT report to wqmscerts@gmail.com" /> :
+                  ndt.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
+                      <td style={td({ color: D.accent, fontWeight: 600 })}>{r.report_no || "—"}</td>
+                      <td style={td()}>{r.method || "—"}</td>
+                      <td style={td({ fontFamily: "'DM Mono',monospace" })}>{r.weld_id || "—"}</td>
+                      <td style={td()}>{r.technician || "—"}</td>
+                      <td style={td()}>{r.standard || "—"}</td>
+                      <td style={td()}><ResultBadge v={r.result} /></td>
+                      <td style={td()}>{fmt(r.test_date)}</td>
+                      <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Heat Treatment */}
+      {tab === "ht" && (
+        <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
+          <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+              <thead><tr>{["Report No","HT Type","Component","Weld ID","Target Temp","Soak Time","Result","Test Date","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {ht.length === 0 ? <EmptyRow cols={9} msg="No heat treatment reports yet — send a PWHT record to wqmscerts@gmail.com" /> :
+                  ht.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
+                      <td style={td({ color: D.accent, fontWeight: 600 })}>{r.report_no || "—"}</td>
+                      <td style={td()}>{r.ht_type || "—"}</td>
+                      <td style={td()}>{r.component_id || "—"}</td>
+                      <td style={td({ fontFamily: "'DM Mono',monospace" })}>{r.weld_id || "—"}</td>
+                      <td style={td()}>{r.target_temp != null ? `${r.target_temp}°C` : "—"}</td>
+                      <td style={td()}>{r.soak_time != null ? `${r.soak_time} min` : "—"}</td>
+                      <td style={td()}><ResultBadge v={r.result} /></td>
+                      <td style={td()}>{fmt(r.test_date)}</td>
+                      <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Welder Certs */}
+      {tab === "welder" && (
+        <div style={{ padding: 18, flex: 1, overflowY: "auto" }}>
+          <div style={{ overflowX: "auto", background: D.surface, border: `1px solid ${D.border}`, borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+              <thead><tr>{["Cert No","Welder","Stamp No","Standard","Process","Test Date","Expiry","Document"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {welder.length === 0 ? <EmptyRow cols={8} msg="No welder certs yet — send a welder qualification cert to wqmscerts@gmail.com" /> :
+                  welder.map((r, i) => (
+                    <tr key={r.id} style={{ background: i % 2 === 0 ? D.surface : "transparent" }}>
+                      <td style={td({ color: D.accent, fontWeight: 600 })}>{r.cert_no || "—"}</td>
+                      <td style={td()}>{r.welder_name || "—"}</td>
+                      <td style={td({ fontFamily: "'DM Mono',monospace" })}>{r.stamp_no || "—"}</td>
+                      <td style={td()}>{r.standard || "—"}</td>
+                      <td style={td()}>{r.process || "—"}</td>
+                      <td style={td()}>{fmt(r.test_date)}</td>
+                      <td style={td()}>{fmt(r.expiry_date)}</td>
+                      <td style={td()}>{r.document_url ? <a href={r.document_url} target="_blank" rel="noreferrer" style={{ color: D.accent }}>View PDF</a> : "—"}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
