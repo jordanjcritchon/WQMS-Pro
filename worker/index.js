@@ -351,8 +351,7 @@ function makeClient() {
 }
 
 async function fetchAndProcessUnseen(client) {
-  // Fetch UIDs of unseen messages via sequence number search (no uid option
-  // to avoid Gmail IMAP throttle on UID SEARCH)
+  // Use sequence-number search (no { uid: true } option — that hangs on Gmail)
   const seqNums = await client.search({ seen: false });
   if (seqNums.length === 0) {
     console.log("[WQMS] No new messages");
@@ -360,15 +359,21 @@ async function fetchAndProcessUnseen(client) {
   }
   console.log(`[WQMS] ${seqNums.length} unread message(s)`);
 
-  // Fetch UIDs for those sequence numbers
+  // Collect UIDs in one fetch pass
   const uids = [];
   for await (const msg of client.fetch(seqNums, { uid: true })) {
-    uids.push(msg.uid);
+    if (msg.uid) uids.push(msg.uid);
   }
 
   for (const uid of uids) {
-    await processEmail(client, uid);
-    await new Promise(r => setTimeout(r, 1000));
+    try {
+      await processEmail(client, uid);
+    } catch (e) {
+      console.error(`[WQMS] Failed processing uid ${uid}:`, e.message);
+      // If connection dropped mid-process, throw so the outer loop reconnects
+      if (e.message.includes("not available") || e.message.includes("timeout")) throw e;
+    }
+    await new Promise(r => setTimeout(r, 1500));
   }
 }
 
