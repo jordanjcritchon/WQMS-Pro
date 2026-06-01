@@ -464,9 +464,26 @@ const MaterialsTab: React.FC<{ p: Project }> = ({ p }) => {
 
 // ── main component ────────────────────────────────────────────────────────────
 
+const DELETED_KEY = "wqms_deleted_project_ids";
+
 export const ProjectsModule: React.FC = () => {
-  const [selected, setSelected] = useState<Project>(PROJECTS[0]);
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(DELETED_KEY) || "[]")); } catch { return new Set(); }
+  });
+
+  const activeProjects = PROJECTS.filter(p => !deletedIds.has(p.id));
+
+  const [selected, setSelected] = useState<Project>(activeProjects[0] ?? PROJECTS[0]);
   const [tab,      setTab]      = useState<Tab>("Overview");
+
+  const deleteProject = (id: string) => {
+    if (!window.confirm("Delete this project? It will be removed from the list. This cannot be undone.")) return;
+    const updated = new Set(deletedIds).add(id);
+    setDeletedIds(updated);
+    localStorage.setItem(DELETED_KEY, JSON.stringify([...updated]));
+    const remaining = PROJECTS.filter(p => !updated.has(p.id));
+    if (remaining.length > 0) { setSelected(remaining[0]); setTab("Overview"); }
+  };
 
   const sc = statusColor(selected.status);
 
@@ -478,7 +495,10 @@ export const ProjectsModule: React.FC = () => {
           <div style={{ color: D.textSoft, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em" }}>ACTIVE PROJECTS</div>
         </div>
         <div style={{ flex: 1, overflowY: "auto" }}>
-          {PROJECTS.map(p => {
+          {activeProjects.length === 0 && (
+            <div style={{ padding: 20, color: D.textSoft, fontSize: 12, textAlign: "center" }}>No projects. All have been deleted.</div>
+          )}
+          {activeProjects.map(p => {
             const pc  = statusColor(p.status);
             const sel = p.id === selected.id;
             return (
@@ -523,9 +543,14 @@ export const ProjectsModule: React.FC = () => {
               <div style={{ color: D.text, fontWeight: 700, fontSize: 17, fontFamily: "'Inter',sans-serif" }}>{selected.name}</div>
               <div style={{ color: D.textSoft, fontSize: 12, marginTop: 2 }}>{selected.client} · {selected.standard}</div>
             </div>
-            <div style={{ textAlign: "right" }}>
+            <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
               <div style={{ color: sc, fontWeight: 700, fontSize: 28 }}>{selected.progress}%</div>
-              <div style={{ color: D.textSoft, fontSize: 10 }}>complete</div>
+              <div style={{ color: D.textSoft, fontSize: 10, marginTop: -6 }}>complete</div>
+              <button
+                onClick={() => deleteProject(selected.id)}
+                style={{ background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail, borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Delete Project
+              </button>
             </div>
           </div>
 
