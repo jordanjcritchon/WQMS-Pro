@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { fileURLToPath } from "url";
 
 const ANTHROPIC_TARGET = process.env.LOCAL_ANTHROPIC_PROXY === "true"
   ? "http://localhost:3001/api/anthropic"
@@ -39,6 +40,12 @@ export default defineConfig({
       },
     }),
   ],
+  optimizeDeps: {
+    include: ["pdfjs-dist"],
+  },
+  worker: {
+    format: "es",
+  },
   server: {
     proxy: {
       "/api/anthropic": {
