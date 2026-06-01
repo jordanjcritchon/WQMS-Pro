@@ -2,10 +2,10 @@
   "name": "wqms-gmail-worker",
   "version": "2.0.0",
   "description": "WQMS Pro — Gmail cert monitoring worker",
-  "main": "index.js",
+  "main": "worker.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node worker.js"
   },
   "engines": {
     "node": ">=20"

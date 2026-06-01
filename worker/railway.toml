@@ -2,5 +2,5 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "node --title wqms-idle index.js"
+startCommand = "node worker.js"
 restartPolicyType = "always"
