@@ -17,7 +17,6 @@ import { createClient } from "@supabase/supabase-js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const POLL_MS    = parseInt(process.env.POLL_SECONDS || "30") * 1000;
 const CERT_EMAIL = process.env.CERT_EMAIL || "wqmscerts@gmail.com";
 const APP_PASS   = process.env.GMAIL_APP_PASSWORD;
 
@@ -334,57 +333,124 @@ function parseMimeAttachments(raw) {
   return attachments;
 }
 
-// ── Poll loop ─────────────────────────────────────────────────────────────────
+// ── IMAP IDLE worker (replaces polling) ──────────────────────────────────────
+// Uses a single persistent connection with IMAP IDLE so Gmail pushes
+// notifications instantly. Reconnects automatically with backoff on error.
+// This avoids the THROTTLED error caused by opening a new connection every 30s.
 
-async function poll() {
-  console.log(`[WQMS] Polling ${CERT_EMAIL}…`);
-
-  const client = new ImapFlow({
+function makeClient() {
+  return new ImapFlow({
     host:   "imap.gmail.com",
     port:   993,
     secure: true,
     auth: { user: CERT_EMAIL, pass: APP_PASS.replace(/\s/g, "") },
     logger: false,
+    // Keep-alive to prevent connection drops
+    tls: { rejectUnauthorized: true },
   });
+}
 
-  try {
-    await client.connect();
-    await client.mailboxOpen("INBOX");
+async function fetchAndProcessUnseen(client) {
+  // Fetch UIDs of unseen messages via sequence number search (no uid option
+  // to avoid Gmail IMAP throttle on UID SEARCH)
+  const seqNums = await client.search({ seen: false });
+  if (seqNums.length === 0) {
+    console.log("[WQMS] No new messages");
+    return;
+  }
+  console.log(`[WQMS] ${seqNums.length} unread message(s)`);
 
-    // Process new unread messages (use uid:true for stable UIDs)
-    const uids = await client.search({ seen: false }, { uid: true });
-    if (uids.length === 0) {
-      console.log("[WQMS] No new messages");
-    } else {
-      console.log(`[WQMS] ${uids.length} unread message(s)`);
-      for (const uid of uids) {
-        await processEmail(client, uid);
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
+  // Fetch UIDs for those sequence numbers
+  const uids = [];
+  for await (const msg of client.fetch(seqNums, { uid: true })) {
+    uids.push(msg.uid);
+  }
 
-    // Sync deletions — remove feed entries for emails no longer in Gmail INBOX
-    // Use uid:true so UIDs are stable and don't shift when emails are deleted
-    const allUids = await client.search({ all: true }, { uid: true });
-    const allUidStrings = new Set(allUids.map(u => String(u)));
+  for (const uid of uids) {
+    await processEmail(client, uid);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
 
-    const { data: stored } = await supabase
-      .from("cert_inbox")
-      .select("id, gmail_message_id");
-
+async function syncDeletions(client) {
+  // Get all current message UIDs in INBOX via sequence-based approach
+  const mbox = client.mailbox;
+  if (!mbox || mbox.exists === 0) {
+    // Inbox empty — remove all feed entries
+    const { data: stored } = await supabase.from("cert_inbox").select("id");
     if (stored && stored.length > 0) {
-      const deleted = stored.filter(r => !allUidStrings.has(r.gmail_message_id));
-      if (deleted.length > 0) {
-        const ids = deleted.map(r => r.id);
-        await supabase.from("cert_inbox").delete().in("id", ids);
-        console.log(`[WQMS] Removed ${deleted.length} deleted email(s) from feed`);
-      }
+      await supabase.from("cert_inbox").delete().in("id", stored.map(r => r.id));
+      console.log(`[WQMS] Inbox empty — cleared ${stored.length} feed entry(ies)`);
     }
+    return;
+  }
 
-  } catch (err) {
-    console.error("[WQMS] IMAP error:", err.message);
-  } finally {
-    try { await client.logout(); } catch {}
+  // Fetch all UIDs from current mailbox
+  const allUids = new Set();
+  for await (const msg of client.fetch("1:*", { uid: true })) {
+    allUids.add(String(msg.uid));
+  }
+
+  const { data: stored } = await supabase.from("cert_inbox").select("id, gmail_message_id");
+  if (stored && stored.length > 0) {
+    const deleted = stored.filter(r => !allUids.has(r.gmail_message_id));
+    if (deleted.length > 0) {
+      await supabase.from("cert_inbox").delete().in("id", deleted.map(r => r.id));
+      console.log(`[WQMS] Removed ${deleted.length} deleted email(s) from feed`);
+    }
+  }
+}
+
+async function runIdleWorker() {
+  let backoff = 5000; // start 5s, doubles on each reconnect
+
+  while (true) {
+    const client = makeClient();
+    try {
+      console.log(`[WQMS] Connecting to ${CERT_EMAIL}…`);
+
+      // Timeout the connect attempt — Gmail throttle can cause indefinite hang
+      await Promise.race([
+        client.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Connect timeout after 20s")), 20000)),
+      ]);
+      await client.mailboxOpen("INBOX");
+      console.log("[WQMS] Connected. Processing any pending messages…");
+      backoff = 5000; // reset backoff on successful connect
+
+      // Process any messages that arrived while we were disconnected
+      await fetchAndProcessUnseen(client);
+      await syncDeletions(client);
+
+      // Listen for new message notifications
+      client.on("exists", async ({ count, prevCount }) => {
+        if (count > prevCount) {
+          console.log(`[WQMS] New message detected (${count - prevCount} new)`);
+          try {
+            await fetchAndProcessUnseen(client);
+          } catch (e) {
+            console.error("[WQMS] Error processing new message:", e.message);
+          }
+        }
+      });
+
+      // IDLE — keeps connection open, Gmail pushes EXISTS when new mail arrives
+      // idle() resolves after ~29 min (Gmail's IDLE timeout), then we re-IDLE
+      console.log("[WQMS] Entering IDLE — waiting for new mail…");
+      while (true) {
+        await client.idle();
+        // idle() returned — either new mail, timeout, or error
+        // Re-sync deletions periodically when idle restarts
+        try { await syncDeletions(client); } catch {}
+        console.log("[WQMS] Re-entering IDLE…");
+      }
+
+    } catch (err) {
+      console.error(`[WQMS] Connection error: ${err.message} — reconnecting in ${backoff/1000}s`);
+      try { await client.logout(); } catch {}
+      await new Promise(r => setTimeout(r, backoff));
+      backoff = Math.min(backoff * 2, 5 * 60 * 1000); // cap at 5 min
+    }
   }
 }
 
@@ -394,8 +460,7 @@ console.log("╔═════════════════════�
 console.log("║  WQMS Pro — Gmail Cert Worker        ║");
 console.log("╠══════════════════════════════════════╣");
 console.log(`║  Inbox : ${CERT_EMAIL.padEnd(27)}║`);
-console.log("║  Poll  : every 30 seconds            ║");
+console.log("║  Mode  : IMAP IDLE (push)            ║");
 console.log("╚══════════════════════════════════════╝\n");
 
-poll();
-setInterval(poll, POLL_MS);
+runIdleWorker();
