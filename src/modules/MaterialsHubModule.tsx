@@ -23,7 +23,7 @@ export const MaterialsHubModule: React.FC = () => {
       <div style={{ flex: 1, overflow: "hidden" }}>
         {tab === "materials" && <MaterialsModule />}
         {tab === "heat"      && <HeatModule />}
-        {tab === "certs"     && <CertInboxModule />}
+        {tab === "certs"     && <CertInboxModule context="materials" />}
       </div>
     </div>
   );

@@ -21,7 +21,7 @@ export const ReportsModule: React.FC = () => {
         {tab === "vt"  && <VTModule />}
         {tab === "ndt" && <NDTModule />}
         {tab === "heat"&& <HeatModule />}
-        {tab === "inbox"&& <CertInboxModule />}
+        {tab === "inbox"&& <CertInboxModule context="reports" />}
       </div>
     </div>
   );

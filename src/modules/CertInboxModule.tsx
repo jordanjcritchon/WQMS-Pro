@@ -188,7 +188,13 @@ const MonitorTab: React.FC<{ emails: InboxEmail[]; loading: boolean; lastPoll: D
 
 // ── Main module ───────────────────────────────────────────────────────────────
 
-export const CertInboxModule: React.FC = () => {
+type CertInboxContext = "all" | "materials" | "reports";
+
+interface CertInboxModuleProps {
+  context?: CertInboxContext;
+}
+
+export const CertInboxModule: React.FC<CertInboxModuleProps> = ({ context = "all" }) => {
   const [tab, setTab] = useState("monitor");
   const [loading, setLoading] = useState(false);
   const [lastPoll, setLastPoll] = useState<Date | null>(null);
@@ -251,7 +257,7 @@ export const CertInboxModule: React.FC = () => {
     return () => clearInterval(t);
   }, [load]);
 
-  const tabs: [string, string, number?][] = [
+  const allTabs: [string, string, number?][] = [
     ["monitor",    "Monitor"],
     ["material",   "Material Certs",   material.length   || undefined],
     ["consumable", "Consumable Certs", consumable.length || undefined],
@@ -259,6 +265,18 @@ export const CertInboxModule: React.FC = () => {
     ["ht",         "Heat Treatment",   ht.length         || undefined],
     ["welder",     "Welder Certs",     welder.length     || undefined],
   ];
+
+  // Filter tabs by context:
+  // materials → Monitor + Material Certs + Consumable Certs
+  // reports   → Monitor + NDT Reports + Heat Treatment + Welder Certs
+  // all       → all tabs (default, unchanged)
+  const visibleTabIds = context === "materials"
+    ? ["monitor", "material", "consumable"]
+    : context === "reports"
+    ? ["monitor", "ndt", "ht", "welder"]
+    : allTabs.map(t => t[0]);
+
+  const tabs = allTabs.filter(t => visibleTabIds.includes(t[0]));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
