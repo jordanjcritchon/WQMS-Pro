@@ -20,6 +20,11 @@ import { createClient } from "@supabase/supabase-js";
 const CERT_EMAIL = process.env.CERT_EMAIL || "wqmscerts@gmail.com";
 const APP_PASS   = process.env.GMAIL_APP_PASSWORD;
 
+if (!APP_PASS) {
+  console.error("[WQMS] FATAL: GMAIL_APP_PASSWORD environment variable is not set");
+  process.exit(1);
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
@@ -416,8 +421,8 @@ async function runIdleWorker() {
   let backoff = 5000; // start 5s, doubles on each reconnect
 
   while (true) {
-    const client = makeClient();
     try {
+    const client = makeClient();
       console.log(`[WQMS] Connecting to ${CERT_EMAIL}…`);
 
       // Timeout the connect attempt — Gmail throttle can cause indefinite hang
