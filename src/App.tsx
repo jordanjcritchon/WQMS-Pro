@@ -17,7 +17,7 @@ import { NCRModule }          from "./modules/NCRModule";
 import { ComplianceModule }   from "./modules/ComplianceModule";
 import { MDRModule }          from "./modules/MDRModule";
 import { ReadinessModule }    from "./modules/ReadinessModule";
-import { CertInboxModule }    from "./modules/CertInboxModule";
+import { ReportsModule }      from "./modules/ReportsModule";
 import { PlaceholderModule }  from "./modules/PlaceholderModule";
 
 const GLOBAL_STYLES = (border: string, accent: string, accentFaint: string, textSoft: string) => `
@@ -101,8 +101,7 @@ function AppShell() {
       case "ncr":          return <NCRModule preselect={ncrTarget} />;
       case "compliance":   return <ComplianceModule   setActive={setActiveSafe} />;
       case "readiness":    return <ReadinessModule />;
-      case "reports":      return <MDRModule />;
-      case "certinbox":   return <CertInboxModule />;
+      case "reports":      return <ReportsModule />;
       default:             return <PlaceholderModule id={active} />;
     }
   };

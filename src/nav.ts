@@ -10,8 +10,7 @@ export const NAV: NavItem[] = [
   { id: "materials",    icon: "MT", label: "Materials",         group: "quality"    },
   { id: "ncr",          icon: "NC", label: "NCR / Defects",     group: "quality"    },
   { id: "compliance",   icon: "CM", label: "Compliance",        group: "quality"    },
-  { id: "reports",      icon: "RP", label: "Reports & MDR",     group: "system"     },
-  { id: "certinbox",   icon: "CI", label: "Cert Inbox",         group: "system"     },
+  { id: "reports",      icon: "RP", label: "Reports",           group: "quality"    },
 ];
 
 export const NAV_GROUPS: Record<string, string> = {
