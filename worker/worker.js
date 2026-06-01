@@ -233,11 +233,19 @@ async function processEmail(client, uid) {
 
   if (inboxErr) {
     if (inboxErr.code === "23505") {
-      console.log(`[WQMS] Already processed uid ${uid}, skipping`);
+      console.log(`[WQMS] Already recorded uid ${uid} — marking read`);
+      try { await client.messageFlagsAdd([uid], ["\\Seen"], { uid: true }); } catch {}
       return;
     }
     console.error("[WQMS] inbox insert error:", inboxErr.message);
     return;
+  }
+
+  // Mark as read immediately after recording — prevents infinite loops if extraction fails
+  try {
+    await client.messageFlagsAdd([uid], ["\\Seen"], { uid: true });
+  } catch (e) {
+    console.warn(`[WQMS] Could not mark uid ${uid} as read:`, e.message);
   }
 
   for (const att of attachments) {
@@ -287,8 +295,6 @@ async function processEmail(client, uid) {
     }
   }
 
-  // Mark as read
-  await client.messageFlagsAdd([uid], ["\\Seen"], { uid: true });
 }
 
 // ── Simple MIME attachment parser ─────────────────────────────────────────────
