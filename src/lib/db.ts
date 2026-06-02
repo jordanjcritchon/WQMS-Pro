@@ -92,13 +92,16 @@ export async function getWelders(): Promise<Welder[]> {
   const { data: quals, error: qe } = await supabase.from("welder_qualifications").select("*").order("welder_id");
   if (qe) throw qe;
   return (welders ?? []).map(w => ({
-    id:             w.id,
-    stampNo:        w.stamp_no,
-    firstName:      w.first_name,
-    lastName:       w.last_name,
-    employer:       w.employer ?? "",
-    trade:          w.trade ?? "",
-    status:         w.status,
+    id:           w.id,
+    stampNo:      w.stamp_no,
+    firstName:    w.first_name,
+    lastName:     w.last_name,
+    dateOfBirth:  w.date_of_birth  ?? undefined,
+    birthplace:   w.birthplace     ?? undefined,
+    employer:     w.employer       ?? "",
+    trade:        w.trade          ?? "",
+    photoUrl:     w.photo_url      ?? undefined,
+    status:       w.status,
     qualifications: (quals ?? []).filter(q => q.welder_id === w.id).map(rowToQual),
   }));
 }
@@ -108,12 +111,24 @@ export async function upsertWelder(w: Welder): Promise<void> {
   const { error } = await supabase.from("welders").upsert({
     id: w.id, stamp_no: w.stampNo, first_name: w.firstName, last_name: w.lastName,
     employer: w.employer, trade: w.trade, status: w.status,
+    date_of_birth: w.dateOfBirth ?? null, birthplace: w.birthplace ?? null,
+    photo_url: w.photoUrl ?? null,
   });
   if (error) throw error;
   for (const q of w.qualifications) {
     const { error: qe } = await supabase.from("welder_qualifications").upsert(qualToRow(q, w.id));
     if (qe) throw qe;
   }
+}
+
+export async function uploadWelderPhoto(welderId: string, file: File): Promise<string> {
+  if (!supabase) throw new Error("Supabase not configured");
+  const ext  = file.name.split(".").pop() ?? "jpg";
+  const path = `${welderId}.${ext}`;
+  const { error } = await supabase.storage.from("welder-photos").upload(path, file, { upsert: true });
+  if (error) throw error;
+  const { data } = supabase.storage.from("welder-photos").getPublicUrl(path);
+  return data.publicUrl;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -545,6 +560,25 @@ function rowToQual(r: any): WelderQualification {
     testLab: r.test_lab ?? "", wpsUsed: r.wps_used ?? "",
     certNo: r.cert_no ?? "", continuityOk: r.continuity_ok ?? true,
     lastActivity: r.last_activity ?? "",
+    productForm:               r.product_form               ?? undefined,
+    fillerMaterialType:        r.filler_material_type       ?? undefined,
+    fillerMaterialDesignation: r.filler_material_designation ?? undefined,
+    shieldingGas:              r.shielding_gas              ?? undefined,
+    backingGas:                r.backing_gas                ?? undefined,
+    weldType:                  r.weld_type                  ?? undefined,
+    pipeDiameter:              r.pipe_diameter              ?? undefined,
+    preheat:                   r.preheat                    ?? undefined,
+    pwht:                      r.pwht                       ?? undefined,
+    visualResult:              r.visual_result              ?? undefined,
+    bendResult:                r.bend_result                ?? undefined,
+    fractureResult:            r.fracture_result            ?? undefined,
+    radiographicResult:        r.radiographic_result        ?? undefined,
+    hardnessResult:            r.hardness_result            ?? undefined,
+    examinationBody:           r.examination_body           ?? undefined,
+    examinerName:              r.examiner_name              ?? undefined,
+    examinerCert:              r.examiner_cert              ?? undefined,
+    manufacturerName:          r.manufacturer_name          ?? undefined,
+    manufacturerRef:           r.manufacturer_ref           ?? undefined,
   };
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -556,6 +590,25 @@ function qualToRow(q: WelderQualification, welderId: string): any {
     test_date: q.testDate, expiry_date: q.expiryDate, test_piece: q.testPiece,
     result: q.result, test_lab: q.testLab, wps_used: q.wpsUsed,
     cert_no: q.certNo, continuity_ok: q.continuityOk, last_activity: q.lastActivity,
+    product_form:                q.productForm               ?? null,
+    filler_material_type:        q.fillerMaterialType        ?? null,
+    filler_material_designation: q.fillerMaterialDesignation ?? null,
+    shielding_gas:               q.shieldingGas              ?? null,
+    backing_gas:                 q.backingGas                ?? null,
+    weld_type:                   q.weldType                  ?? null,
+    pipe_diameter:               q.pipeDiameter              ?? null,
+    preheat:                     q.preheat                   ?? null,
+    pwht:                        q.pwht                      ?? null,
+    visual_result:               q.visualResult              ?? null,
+    bend_result:                 q.bendResult                ?? null,
+    fracture_result:             q.fractureResult            ?? null,
+    radiographic_result:         q.radiographicResult        ?? null,
+    hardness_result:             q.hardnessResult            ?? null,
+    examination_body:            q.examinationBody           ?? null,
+    examiner_name:               q.examinerName              ?? null,
+    examiner_cert:               q.examinerCert              ?? null,
+    manufacturer_name:           q.manufacturerName          ?? null,
+    manufacturer_ref:            q.manufacturerRef           ?? null,
   };
 }
 

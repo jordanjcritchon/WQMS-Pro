@@ -58,6 +58,26 @@ export interface WelderQualification {
   certNo:         string;
   continuityOk:   boolean;
   lastActivity:   string;
+  // ISO 9606-1 extended fields
+  productForm?:                "plate" | "pipe";
+  fillerMaterialType?:         string;
+  fillerMaterialDesignation?:  string;
+  shieldingGas?:               string;
+  backingGas?:                 string;
+  weldType?:                   "single" | "multi";
+  pipeDiameter?:               string;
+  preheat?:                    string;
+  pwht?:                       string;
+  visualResult?:               string;
+  bendResult?:                 string;
+  fractureResult?:             string;
+  radiographicResult?:         string;
+  hardnessResult?:             string;
+  examinationBody?:            string;
+  examinerName?:               string;
+  examinerCert?:               string;
+  manufacturerName?:           string;
+  manufacturerRef?:            string;
 }
 
 export interface Welder {
@@ -65,8 +85,11 @@ export interface Welder {
   stampNo:        string;
   firstName:      string;
   lastName:       string;
+  dateOfBirth?:   string;
+  birthplace?:    string;
   employer:       string;
   trade:          string;
+  photoUrl?:      string;
   status:         "Current" | "Expiring Soon" | "Expired";
   qualifications: WelderQualification[];
 }

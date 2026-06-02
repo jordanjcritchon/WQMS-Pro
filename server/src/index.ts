@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { router } from "./routes";
 import { startImapListener } from "./imap";
+import { startWpsWorker } from "./wpsWorker";
 
 dotenv.config();
 
@@ -31,3 +32,5 @@ app.listen(Number(PORT), "0.0.0.0", () => {
 
 // processAll=true on first run so any existing unread emails are picked up
 startImapListener(EMAIL, EMAIL_PASSWORD, ANTHROPIC_API_KEY || undefined, true);
+// Start WPS worker to automatically validate queued WPS JSON files
+startWpsWorker(ANTHROPIC_API_KEY || undefined).catch(err => console.error("[WQMS] WPS worker failed to start:", err.message));

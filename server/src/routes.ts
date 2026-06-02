@@ -5,6 +5,7 @@ import os from "os";
 import { queryTable } from "./db";
 import { status } from "./imap";
 import { baseDir } from "./fileStore";
+import Anthropic from "@anthropic-ai/sdk";
 
 export const router = Router();
 
@@ -43,4 +44,24 @@ router.post("/file/open", (req, res) => {
     if (err) { res.status(500).json({ error: err.message }); return; }
     res.json({ success: true });
   });
+});
+
+// ── Anthropic proxy (server-side) ─────────────────────────────────
+router.post("/anthropic/v1/messages", async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    res.status(500).json({ error: "Server missing ANTHROPIC_API_KEY" });
+    return;
+  }
+
+  try {
+    const client = new Anthropic({ apiKey });
+    // forward the request body as-is to the Anthropic SDK
+    // expect body to contain model, messages, system, max_tokens etc.
+    const response = await client.messages.create(req.body as any);
+    res.json(response);
+  } catch (err: unknown) {
+    const e = err as Error;
+    res.status(500).json({ error: e.message });
+  }
 });
