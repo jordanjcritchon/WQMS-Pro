@@ -115,8 +115,11 @@ export async function upsertWelder(w: Welder): Promise<void> {
     photo_url: w.photoUrl ?? null,
   });
   if (error) throw error;
-  for (const q of w.qualifications) {
-    const { error: qe } = await supabase.from("welder_qualifications").upsert(qualToRow(q, w.id));
+  // Upsert all qualifications in parallel instead of sequentially
+  if (w.qualifications.length > 0) {
+    const { error: qe } = await supabase
+      .from("welder_qualifications")
+      .upsert(w.qualifications.map(q => qualToRow(q, w.id)));
     if (qe) throw qe;
   }
 }
@@ -127,11 +130,27 @@ export async function deleteQualifications(ids: string[]): Promise<void> {
   if (error) throw error;
 }
 
+async function compressImage(file: File, maxPx = 600, quality = 0.8): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale  = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width  = Math.round(img.width  * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error("Compression failed")), "image/jpeg", quality);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 export async function uploadWelderPhoto(welderId: string, file: File): Promise<string> {
   if (!supabase) throw new Error("Supabase not configured");
-  const ext  = file.name.split(".").pop() ?? "jpg";
-  const path = `${welderId}.${ext}`;
-  const { error } = await supabase.storage.from("welder-photos").upload(path, file, { upsert: true });
+  const compressed = await compressImage(file);
+  const path = `${welderId}.jpg`;
+  const { error } = await supabase.storage.from("welder-photos").upload(path, compressed, { upsert: true, contentType: "image/jpeg" });
   if (error) throw error;
   const { data } = supabase.storage.from("welder-photos").getPublicUrl(path);
   return data.publicUrl;
