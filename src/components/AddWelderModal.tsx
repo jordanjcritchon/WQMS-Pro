@@ -1,7 +1,7 @@
 import React, { useState, useRef } from "react";
 import { jsPDF } from "jspdf";
 import { D, inp } from "../theme";
-import type { Welder, WelderQualification } from "../types";
+import type { Welder, WelderQualification, QualDocument } from "../types";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -257,7 +257,7 @@ export async function generateQualCertPDF(welder: Welder, q: WelderQualification
 
 interface Props {
   onClose:        () => void;
-  onSave:         (welder: Welder, photoFile: File | null, removedQualIds: string[]) => Promise<void>;
+  onSave:         (welder: Welder, photoFile: File | null, removedQualIds: string[], pendingDocs: Record<string, File[]>) => Promise<void>;
   initialWelder?: Welder;
 }
 
@@ -277,6 +277,8 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave, initialWelder
     initialWelder?.qualifications.length ? initialWelder.qualifications : [blankQual()]
   );
   const [removedQualIds, setRemovedQualIds] = useState<string[]>([]);
+  // pendingDocs: files the user picked but haven't been uploaded yet, keyed by qual id
+  const [pendingDocs, setPendingDocs] = useState<Record<string, File[]>>({});
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState<string | null>(null);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -313,7 +315,7 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave, initialWelder
       qualifications: quals.map(q => ({ ...blankQual(), ...q, id: q.id ?? crypto.randomUUID() }) as WelderQualification),
     };
     setSaving(true); setError(null);
-    try { await onSave(welder, photoFile, removedQualIds); onClose(); }
+    try { await onSave(welder, photoFile, removedQualIds, pendingDocs); onClose(); }
     catch (e: unknown) { setError((e as Error).message); }
     finally { setSaving(false); }
   };
@@ -495,6 +497,51 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave, initialWelder
                       </div>
                     ))}
                   </div>
+                </div>
+
+                {/* Supporting Documents */}
+                <div style={{ marginBottom: 12 }}>
+                  <label style={S.label}>Supporting Documents (test reports, certificates)</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                    {/* Existing saved documents */}
+                    {(q.documents ?? []).map((doc, di) => (
+                      <div key={di} style={{ display: "flex", alignItems: "center", gap: 8, background: D.surfaceAlt, border: `1px solid ${D.border}`, borderRadius: 5, padding: "6px 10px" }}>
+                        <span style={{ fontSize: 14 }}>📄</span>
+                        <span style={{ flex: 1, color: D.textMid, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</span>
+                        <button
+                          onClick={() => updateQual(i, { documents: (q.documents ?? []).filter((_, j) => j !== di) })}
+                          style={{ ...S.smallBtn, color: D.fail, borderColor: D.failBorder }}
+                        >✕ Remove</button>
+                      </div>
+                    ))}
+                    {/* Pending (not yet uploaded) documents */}
+                    {(pendingDocs[q.id!] ?? []).map((f, fi) => (
+                      <div key={fi} style={{ display: "flex", alignItems: "center", gap: 8, background: D.surfaceAlt, border: `1px dashed ${D.accent}`, borderRadius: 5, padding: "6px 10px" }}>
+                        <span style={{ fontSize: 14 }}>📎</span>
+                        <span style={{ flex: 1, color: D.textMid, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                        <span style={{ color: D.accent, fontSize: 10 }}>pending upload</span>
+                        <button
+                          onClick={() => setPendingDocs(pd => ({ ...pd, [q.id!]: (pd[q.id!] ?? []).filter((_, j) => j !== fi) }))}
+                          style={{ ...S.smallBtn, color: D.fail, borderColor: D.failBorder }}
+                        >✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  <label style={{ ...S.smallBtn, cursor: "pointer", display: "inline-block" }}>
+                    + Attach PDF / Document
+                    <input
+                      type="file"
+                      accept=".pdf,.doc,.docx,image/*"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={e => {
+                        const files = Array.from(e.target.files ?? []);
+                        if (!files.length) return;
+                        setPendingDocs(pd => ({ ...pd, [q.id!]: [...(pd[q.id!] ?? []), ...files] }));
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
                 </div>
 
                 <div style={{ ...S.grid2, marginBottom: 8 }}>

@@ -10,7 +10,7 @@
 
 import { supabase } from "./supabase";
 import type {
-  Project, WPS, PQR, Welder, WelderQualification, NCR, VTReport,
+  Project, WPS, PQR, Welder, WelderQualification, QualDocument, NCR, VTReport,
   RawMaterial, Consumable, NDTRecord, NDTEquipment, NDTTechnician,
   HeatTreatment, ITP, ITPStep, WeldPassport, WeldMapNode, MDRPackage, Alert,
 } from "../types";
@@ -144,6 +144,16 @@ async function compressImage(file: File, maxPx = 600, quality = 0.8): Promise<Bl
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
   });
+}
+
+export async function uploadQualDocument(welderId: string, qualId: string, file: File): Promise<QualDocument> {
+  if (!supabase) throw new Error("Supabase not configured");
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path     = `${welderId}/${qualId}/${safeName}`;
+  const { error } = await supabase.storage.from("welder-cert-docs").upload(path, file, { upsert: true });
+  if (error) throw error;
+  const { data } = supabase.storage.from("welder-cert-docs").getPublicUrl(path);
+  return { name: file.name, url: data.publicUrl };
 }
 
 export async function uploadWelderPhoto(welderId: string, file: File): Promise<string> {
@@ -604,6 +614,7 @@ function rowToQual(r: any): WelderQualification {
     examinerCert:              r.examiner_cert              ?? undefined,
     manufacturerName:          r.manufacturer_name          ?? undefined,
     manufacturerRef:           r.manufacturer_ref           ?? undefined,
+    documents:                 r.documents                  ?? [],
   };
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -634,6 +645,7 @@ function qualToRow(q: WelderQualification, welderId: string): any {
     examiner_cert:               q.examinerCert              ?? null,
     manufacturer_name:           q.manufacturerName          ?? null,
     manufacturer_ref:            q.manufacturerRef           ?? null,
+    documents:                   q.documents                 ?? [],
   };
 }
 

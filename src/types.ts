@@ -41,6 +41,11 @@ export interface PQR {
 }
 
 // ─── Welders ─────────────────────────────────────────────────────────────────
+export interface QualDocument {
+  name: string;
+  url:  string;
+}
+
 export interface WelderQualification {
   id:             string;
   standard:       string;
@@ -78,6 +83,7 @@ export interface WelderQualification {
   examinerCert?:               string;
   manufacturerName?:           string;
   manufacturerRef?:            string;
+  documents?:                  QualDocument[];
 }
 
 export interface Welder {

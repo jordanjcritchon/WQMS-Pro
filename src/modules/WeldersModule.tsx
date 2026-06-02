@@ -30,24 +30,37 @@ export const WeldersModule: React.FC = () => {
     return !s || `${w.firstName} ${w.lastName} ${w.stampNo} ${w.employer}`.toLowerCase().includes(s);
   });
 
-  const handleSaveWelder = async (welder: Welder, photoFile: File | null, removedQualIds: string[]) => {
+  const uploadPendingDocs = async (welder: Welder, pendingDocs: Record<string, File[]>): Promise<Welder> => {
+    const updated: Welder = { ...welder };
+    updated.qualifications = await Promise.all(welder.qualifications.map(async q => {
+      const files = pendingDocs[q.id] ?? [];
+      if (!files.length) return q;
+      const newDocs = await Promise.all(files.map(f => db.uploadQualDocument(welder.id, q.id, f)));
+      return { ...q, documents: [...(q.documents ?? []), ...newDocs] };
+    }));
+    return updated;
+  };
+
+  const handleSaveWelder = async (welder: Welder, photoFile: File | null, removedQualIds: string[], pendingDocs: Record<string, File[]>) => {
     let photoUrl = welder.photoUrl;
     if (photoFile) photoUrl = await db.uploadWelderPhoto(welder.id, photoFile);
-    const welderWithPhoto = { ...welder, photoUrl };
+    let final: Welder = { ...welder, photoUrl };
+    final = await uploadPendingDocs(final, pendingDocs);
     if (removedQualIds.length) await db.deleteQualifications(removedQualIds);
-    await db.upsertWelder(welderWithPhoto);
-    setWelderData(prev => [...prev, welderWithPhoto]);
+    await db.upsertWelder(final);
+    setWelderData(prev => [...prev, final]);
     await refresh();
   };
 
-  const handleEditWelder = async (welder: Welder, photoFile: File | null, removedQualIds: string[]) => {
+  const handleEditWelder = async (welder: Welder, photoFile: File | null, removedQualIds: string[], pendingDocs: Record<string, File[]>) => {
     let photoUrl = welder.photoUrl;
     if (photoFile) photoUrl = await db.uploadWelderPhoto(welder.id, photoFile);
-    const welderWithPhoto = { ...welder, photoUrl };
+    let final: Welder = { ...welder, photoUrl };
+    final = await uploadPendingDocs(final, pendingDocs);
     if (removedQualIds.length) await db.deleteQualifications(removedQualIds);
-    await db.upsertWelder(welderWithPhoto);
-    setWelderData(prev => prev.map(w => w.id === welderWithPhoto.id ? welderWithPhoto : w));
-    setSel(welderWithPhoto);
+    await db.upsertWelder(final);
+    setWelderData(prev => prev.map(w => w.id === final.id ? final : w));
+    setSel(final);
     await refresh();
   };
 
@@ -166,6 +179,19 @@ export const WeldersModule: React.FC = () => {
                     <div style={{ color: D.textSoft, fontSize: 11 }}>t: {q.thicknessRange} mm · Tested: {q.testDate}</div>
                     {q.certNo && <div style={{ color: D.textSoft, fontSize: 11 }}>Cert: {q.certNo}</div>}
                     {!q.continuityOk && <div style={{ marginTop: 4 }}><Tag label="⚠ Continuity check required" kind="amber" /></div>}
+
+                    {/* Attached documents */}
+                    {(q.documents ?? []).length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ color: D.textSoft, fontSize: 10, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Documents</div>
+                        {(q.documents ?? []).map((doc, di) => (
+                          <a key={di} href={doc.url} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 6, color: D.accent, fontSize: 12, textDecoration: "none", marginBottom: 3 }}>
+                            <span>📄</span>
+                            <span style={{ textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Export PDF button */}
                     <button
