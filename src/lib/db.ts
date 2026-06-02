@@ -10,7 +10,7 @@
 
 import { supabase } from "./supabase";
 import type {
-  Project, WPS, PQR, Welder, WelderQualification, QualDocument, NCR, VTReport,
+  Project, ProjectDrawing, WPS, PQR, Welder, WelderQualification, QualDocument, NCR, VTReport,
   RawMaterial, Consumable, NDTRecord, NDTEquipment, NDTTechnician,
   HeatTreatment, ITP, ITPStep, WeldPassport, WeldMapNode, MDRPackage, Alert,
 } from "../types";
@@ -534,6 +534,7 @@ function rowToProject(r: any): Project {
     id: r.id, name: r.name, client: r.client, status: r.status,
     progress: r.progress, standard: r.standard, due: r.due,
     welds: { total: r.welds_total, complete: r.welds_complete, pending: r.welds_pending, rejected: r.welds_rejected },
+    drawings: r.drawings ?? [],
   };
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -543,8 +544,25 @@ function projectToRow(p: Project): any {
     progress: p.progress, standard: p.standard, due: p.due,
     welds_total: p.welds.total, welds_complete: p.welds.complete,
     welds_pending: p.welds.pending, welds_rejected: p.welds.rejected,
+    drawings: p.drawings ?? [],
     updated_at: new Date().toISOString(),
   };
+}
+
+export async function uploadProjectDrawing(projectId: string, file: File): Promise<string> {
+  if (!supabase) throw new Error("Supabase not configured");
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path     = `${projectId}/${Date.now()}_${safeName}`;
+  const { error } = await supabase.storage.from("project-drawings").upload(path, file, { upsert: true });
+  if (error) throw error;
+  const { data } = supabase.storage.from("project-drawings").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+export async function saveProjectDrawings(projectId: string, drawings: ProjectDrawing[]): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from("projects").update({ drawings }).eq("id", projectId);
+  if (error) throw error;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

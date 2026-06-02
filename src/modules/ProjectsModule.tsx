@@ -1,14 +1,18 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { D } from "../theme";
 import { Card, StatusDot, Progress, Tag } from "../components";
 import {
-  PROJECTS, NCR_DATA, VT_REPORTS, WELD_PASSPORTS,
+  NCR_DATA, VT_REPORTS, WELD_PASSPORTS,
   ITP_DATA, READINESS_CHECKS, HT_DATA, MDR_PACKAGES, MAT_RAW,
 } from "../data";
 import { PROJ_SM } from "../statusMeta";
-import type { Project } from "../types";
+import { useStore } from "../store";
+import * as db from "../lib/db";
+import { AddProjectModal } from "../components/AddProjectModal";
+import { DrawingViewer } from "../components/DrawingViewer";
+import type { Project, ProjectDrawing } from "../types";
 
-const TABS = ["Overview", "Welds", "Quality", "ITP", "Materials"] as const;
+const TABS = ["Overview", "Welds", "Quality", "ITP", "Materials", "Drawings"] as const;
 type Tab = typeof TABS[number];
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -462,53 +466,159 @@ const MaterialsTab: React.FC<{ p: Project }> = ({ p }) => {
   );
 };
 
-// ── main component ────────────────────────────────────────────────────────────
+// ── Drawings tab ──────────────────────────────────────────────────────────────
 
-const DELETED_KEY = "wqms_deleted_project_ids";
+const DrawingsTab: React.FC<{
+  project:    Project;
+  onUpdate:   (drawings: ProjectDrawing[]) => void;
+  onView:     (d: ProjectDrawing) => void;
+}> = ({ project, onUpdate, onView }) => {
+  const [uploading, setUploading] = useState(false);
+  const [error,     setError]     = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-export const ProjectsModule: React.FC = () => {
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem(DELETED_KEY) || "[]")); } catch { return new Set(); }
-  });
+  const drawings = project.drawings ?? [];
 
-  const activeProjects = PROJECTS.filter(p => !deletedIds.has(p.id));
-
-  const [selected, setSelected] = useState<Project>(activeProjects[0] ?? PROJECTS[0]);
-  const [tab,      setTab]      = useState<Tab>("Overview");
-
-  const deleteProject = (id: string) => {
-    if (!window.confirm("Delete this project? It will be removed from the list. This cannot be undone.")) return;
-    const updated = new Set(deletedIds).add(id);
-    setDeletedIds(updated);
-    localStorage.setItem(DELETED_KEY, JSON.stringify([...updated]));
-    const remaining = PROJECTS.filter(p => !updated.has(p.id));
-    if (remaining.length > 0) { setSelected(remaining[0]); setTab("Overview"); }
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    e.target.value = "";
+    const name = file.name.replace(/\.pdf$/i, "");
+    setUploading(true); setError(null);
+    try {
+      const url      = await db.uploadProjectDrawing(project.id, file);
+      const newDrawing: ProjectDrawing = { id: crypto.randomUUID(), name, url, rotation: 0 };
+      const updated  = [...drawings, newDrawing];
+      await db.saveProjectDrawings(project.id, updated);
+      onUpdate(updated);
+    } catch (e: unknown) { setError((e as Error).message); }
+    finally { setUploading(false); }
   };
 
-  const sc = statusColor(selected.status);
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Remove this drawing?")) return;
+    const updated = drawings.filter(d => d.id !== id);
+    await db.saveProjectDrawings(project.id, updated);
+    onUpdate(updated);
+  };
+
+  return (
+    <Card s={{ padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ color: D.textSoft, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em" }}>PROJECT DRAWINGS</div>
+        <label style={{ background: "#2a4a9a", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", cursor: uploading ? "default" : "pointer", fontSize: 12, fontWeight: 600, opacity: uploading ? 0.6 : 1 }}>
+          {uploading ? "Uploading…" : "+ Upload Drawing"}
+          <input ref={fileRef} type="file" accept=".pdf" style={{ display: "none" }} onChange={handleUpload} disabled={uploading} />
+        </label>
+      </div>
+
+      {error && <div style={{ color: D.fail, fontSize: 12, marginBottom: 12 }}>{error}</div>}
+
+      {drawings.length === 0 ? (
+        <div style={{ color: D.textSoft, fontSize: 13, textAlign: "center", padding: "32px 0" }}>
+          No drawings uploaded yet. Click <strong>+ Upload Drawing</strong> to add a PDF.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {drawings.map(d => (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, background: D.surfaceAlt, border: `1px solid ${D.border}`, borderRadius: 8, padding: "12px 14px" }}>
+              <span style={{ fontSize: 24, flexShrink: 0 }}>📐</span>
+              <div style={{ flex: 1, overflow: "hidden" }}>
+                <div style={{ color: D.text, fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</div>
+                {d.rotation !== 0 && <div style={{ color: D.textSoft, fontSize: 11, marginTop: 2 }}>Rotation: {d.rotation}°</div>}
+              </div>
+              <button onClick={() => onView(d)} style={{ background: D.accent, color: "#fff", border: "none", borderRadius: 5, padding: "6px 14px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                View / Rotate
+              </button>
+              <button onClick={() => handleDelete(d.id)} style={{ background: D.failBg, color: D.fail, border: `1px solid ${D.failBorder}`, borderRadius: 5, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+};
+
+// ── main component ────────────────────────────────────────────────────────────
+
+export const ProjectsModule: React.FC = () => {
+  const { projects, setProjects, refresh } = useStore();
+
+  const [selected,    setSelected]    = useState<Project | null>(null);
+  const [tab,         setTab]         = useState<Tab>("Overview");
+  const [showAdd,     setShowAdd]     = useState(false);
+  const [viewDrawing, setViewDrawing] = useState<ProjectDrawing | null>(null);
+
+  const activeProjects = projects;
+  const sel = selected ?? activeProjects[0];
+
+  const handleCreateProject = async (project: Project) => {
+    await db.upsertProject(project);
+    setProjects(prev => [...prev, project]);
+    setSelected(project);
+    setTab("Overview");
+  };
+
+  const handleDeleteProject = async (id: string) => {
+    if (!window.confirm("Delete this project? This cannot be undone.")) return;
+    await db.deleteProject(id);
+    setProjects(prev => prev.filter(p => p.id !== id));
+    setSelected(null);
+    setTab("Overview");
+  };
+
+  const handleDrawingsUpdate = (updated: ProjectDrawing[]) => {
+    if (!sel) return;
+    const updatedProject = { ...sel, drawings: updated };
+    setProjects(prev => prev.map(p => p.id === sel.id ? updatedProject : p));
+    setSelected(updatedProject);
+  };
+
+  const handleSaveRotation = async (rotation: number) => {
+    if (!sel || !viewDrawing) return;
+    const updated = (sel.drawings ?? []).map(d =>
+      d.id === viewDrawing.id ? { ...d, rotation } : d
+    );
+    await db.saveProjectDrawings(sel.id, updated);
+    handleDrawingsUpdate(updated);
+  };
+
+  const deleteProject = handleDeleteProject;
+
+  if (!sel) return (
+    <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16 }}>
+      <div style={{ color: D.textSoft, fontSize: 14 }}>No projects yet.</div>
+      <button onClick={() => setShowAdd(true)} style={{ background: "#2a4a9a", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>+ New Project</button>
+      {showAdd && <AddProjectModal onClose={() => setShowAdd(false)} onSave={handleCreateProject} />}
+    </div>
+  );
+
+  const sc = statusColor(sel.status);
 
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
       {/* ── Left panel: project list ─────────────────────────────────────── */}
       <div style={{ width: 260, flexShrink: 0, background: D.surface, borderRight: `1px solid ${D.border}`, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ padding: "16px 14px 10px", borderBottom: `1px solid ${D.border}` }}>
-          <div style={{ color: D.textSoft, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em" }}>ACTIVE PROJECTS</div>
+        <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${D.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ color: D.textSoft, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em" }}>PROJECTS</div>
+          <button onClick={() => setShowAdd(true)} style={{ background: "#2a4a9a", color: "#fff", border: "none", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ New</button>
         </div>
         <div style={{ flex: 1, overflowY: "auto" }}>
           {activeProjects.length === 0 && (
-            <div style={{ padding: 20, color: D.textSoft, fontSize: 12, textAlign: "center" }}>No projects. All have been deleted.</div>
+            <div style={{ padding: 20, color: D.textSoft, fontSize: 12, textAlign: "center" }}>No projects yet.</div>
           )}
           {activeProjects.map(p => {
-            const pc  = statusColor(p.status);
-            const sel = p.id === selected.id;
+            const pc      = statusColor(p.status);
+            const isSel   = p.id === sel.id;
             return (
               <div
                 key={p.id}
                 onClick={() => { setSelected(p); setTab("Overview"); }}
                 style={{
                   padding: "14px 14px", cursor: "pointer",
-                  borderLeft: `3px solid ${sel ? D.accent : "transparent"}`,
-                  background: sel ? D.surfaceAlt : "transparent",
+                  borderLeft: `3px solid ${isSel ? D.accent : "transparent"}`,
+                  background: isSel ? D.surfaceAlt : "transparent",
                   borderBottom: `1px solid ${D.borderSoft}`,
                   transition: "background 0.1s",
                 }}
@@ -517,7 +627,7 @@ export const ProjectsModule: React.FC = () => {
                   <span style={{ color: D.accent, fontWeight: 700, fontSize: 10, fontFamily: "'DM Mono',monospace" }}>{p.id}</span>
                   <StatusDot status={p.status} meta={PROJ_SM} />
                 </div>
-                <div style={{ color: sel ? D.text : D.textMid, fontWeight: sel ? 700 : 500, fontSize: 12, lineHeight: 1.4, marginBottom: 6 }}>{p.name}</div>
+                <div style={{ color: isSel ? D.text : D.textMid, fontWeight: isSel ? 700 : 500, fontSize: 12, lineHeight: 1.4, marginBottom: 6 }}>{p.name}</div>
                 <div style={{ color: D.textSoft, fontSize: 10, marginBottom: 6 }}>{p.client}</div>
                 <Progress value={p.progress} color={pc} h={4} />
                 <div style={{ marginTop: 4, display: "flex", justifyContent: "space-between" }}>
@@ -537,17 +647,17 @@ export const ProjectsModule: React.FC = () => {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
             <div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
-                <span style={{ color: D.accent, fontWeight: 700, fontSize: 13, fontFamily: "'DM Mono',monospace" }}>{selected.id}</span>
-                <span style={{ color: sc, fontWeight: 700, fontSize: 12, background: selected.status === "On Track" ? "#052e16" : selected.status === "At Risk" ? D.warnBg : D.failBg, border: `1px solid ${sc}`, borderRadius: 4, padding: "2px 8px" }}>{selected.status}</span>
+                <span style={{ color: D.accent, fontWeight: 700, fontSize: 13, fontFamily: "'DM Mono',monospace" }}>{sel.id}</span>
+                <span style={{ color: sc, fontWeight: 700, fontSize: 12, background: sel.status === "On Track" ? "#052e16" : sel.status === "At Risk" ? D.warnBg : D.failBg, border: `1px solid ${sc}`, borderRadius: 4, padding: "2px 8px" }}>{sel.status}</span>
               </div>
-              <div style={{ color: D.text, fontWeight: 700, fontSize: 17, fontFamily: "'Inter',sans-serif" }}>{selected.name}</div>
-              <div style={{ color: D.textSoft, fontSize: 12, marginTop: 2 }}>{selected.client} · {selected.standard}</div>
+              <div style={{ color: D.text, fontWeight: 700, fontSize: 17, fontFamily: "'Inter',sans-serif" }}>{sel.name}</div>
+              <div style={{ color: D.textSoft, fontSize: 12, marginTop: 2 }}>{sel.client} · {sel.standard}</div>
             </div>
             <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-              <div style={{ color: sc, fontWeight: 700, fontSize: 28 }}>{selected.progress}%</div>
+              <div style={{ color: sc, fontWeight: 700, fontSize: 28 }}>{sel.progress}%</div>
               <div style={{ color: D.textSoft, fontSize: 10, marginTop: -6 }}>complete</div>
               <button
-                onClick={() => deleteProject(selected.id)}
+                onClick={() => deleteProject(sel.id)}
                 style={{ background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail, borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                 Delete Project
               </button>
@@ -577,13 +687,30 @@ export const ProjectsModule: React.FC = () => {
 
         {/* Tab content */}
         <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-          {tab === "Overview"   && <OverviewTab   p={selected} />}
-          {tab === "Welds"      && <WeldsTab      p={selected} />}
-          {tab === "Quality"    && <QualityTab    p={selected} />}
-          {tab === "ITP"        && <ITPTab        p={selected} />}
-          {tab === "Materials"  && <MaterialsTab  p={selected} />}
+          {tab === "Overview"   && <OverviewTab   p={sel} />}
+          {tab === "Welds"      && <WeldsTab      p={sel} />}
+          {tab === "Quality"    && <QualityTab    p={sel} />}
+          {tab === "ITP"        && <ITPTab        p={sel} />}
+          {tab === "Materials"  && <MaterialsTab  p={sel} />}
+          {tab === "Drawings"   && (
+            <DrawingsTab
+              project={sel}
+              onUpdate={handleDrawingsUpdate}
+              onView={d => setViewDrawing(d)}
+            />
+          )}
         </div>
       </div>
+
+      {/* Modals */}
+      {showAdd && <AddProjectModal onClose={() => setShowAdd(false)} onSave={handleCreateProject} />}
+      {viewDrawing && (
+        <DrawingViewer
+          drawing={viewDrawing}
+          onClose={() => setViewDrawing(null)}
+          onSave={handleSaveRotation}
+        />
+      )}
     </div>
   );
 };

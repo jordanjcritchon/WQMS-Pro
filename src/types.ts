@@ -108,15 +108,23 @@ export interface ProjectWelds {
   rejected: number;
 }
 
-export interface Project {
+export interface ProjectDrawing {
   id:       string;
   name:     string;
-  client:   string;
-  status:   "On Track" | "At Risk" | "Delayed";
-  progress: number;
-  welds:    ProjectWelds;
-  standard: string;
-  due:      string;
+  url:      string;
+  rotation: number; // 0 | 90 | 180 | 270
+}
+
+export interface Project {
+  id:        string;
+  name:      string;
+  client:    string;
+  status:    "On Track" | "At Risk" | "Delayed";
+  progress:  number;
+  welds:     ProjectWelds;
+  standard:  string;
+  due:       string;
+  drawings?: ProjectDrawing[];
 }
 
 // ─── NCR ─────────────────────────────────────────────────────────────────────
