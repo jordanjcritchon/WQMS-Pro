@@ -63,40 +63,42 @@ const LabelSelect: React.FC<LSProps> = ({ label, value, onChange, options }) => 
 
 interface DPProps { label: string; value: string; onChange: (v: string) => void; }
 const DatePicker: React.FC<DPProps> = ({ label, value, onChange }) => {
-  const [y, m, d] = value ? value.split("-") : ["", "", ""];
+  const init = value ? value.split("-") : ["", "", ""];
+  const [year,  setYear]  = useState(init[0] || "");
+  const [month, setMonth] = useState(init[1] || "");
+  const [day,   setDay]   = useState(init[2] || "");
 
   const daysInMonth = (yr: string, mo: string) =>
     yr && mo ? new Date(Number(yr), Number(mo), 0).getDate() : 31;
 
   const emit = (nd: string, nm: string, ny: string) => {
     if (nd && nm && ny) {
-      const max    = daysInMonth(ny, nm);
-      const safeD  = String(Math.min(Number(nd), max)).padStart(2, "0");
-      onChange(`${ny}-${nm}-${safeD}`);
+      const max  = daysInMonth(ny, nm);
+      const safe = String(Math.min(Number(nd), max)).padStart(2, "0");
+      onChange(`${ny}-${nm}-${safe}`);
     }
   };
 
-  const days = Array.from({ length: daysInMonth(y, m) }, (_, i) => String(i + 1).padStart(2, "0"));
+  const days = Array.from({ length: daysInMonth(year, month) }, (_, i) =>
+    String(i + 1).padStart(2, "0")
+  );
 
   return (
     <div>
       <label style={S.label}>{label}</label>
       <div style={{ display: "flex", gap: 6 }}>
-        <select value={d || ""} onChange={e => emit(e.target.value, m, y)}
-          style={{ ...S.sel, flex: "0 0 64px" }}>
+        <select value={day} onChange={e => { setDay(e.target.value);   emit(e.target.value, month, year);  }} style={{ ...S.sel, flex: "0 0 64px" }}>
           <option value="">DD</option>
           {days.map(dd => <option key={dd} value={dd}>{dd}</option>)}
         </select>
-        <select value={m || ""} onChange={e => emit(d, e.target.value, y)}
-          style={{ ...S.sel, flex: "1 1 0" }}>
+        <select value={month} onChange={e => { setMonth(e.target.value); emit(day, e.target.value, year);  }} style={{ ...S.sel, flex: "1 1 0" }}>
           <option value="">Month</option>
           {MONTHS.map((mo, i) => {
-            const val = String(i + 1).padStart(2, "0");
-            return <option key={val} value={val}>{mo}</option>;
+            const v = String(i + 1).padStart(2, "0");
+            return <option key={v} value={v}>{mo}</option>;
           })}
         </select>
-        <select value={y || ""} onChange={e => emit(d, m, e.target.value)}
-          style={{ ...S.sel, flex: "0 0 80px" }}>
+        <select value={year} onChange={e => { setYear(e.target.value);  emit(day, month, e.target.value); }} style={{ ...S.sel, flex: "0 0 80px" }}>
           <option value="">Year</option>
           {YEARS.map(yr => <option key={yr} value={yr}>{yr}</option>)}
         </select>
