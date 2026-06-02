@@ -117,7 +117,9 @@ For NDT result use PASS or FAIL only.` },
 
   const text = msg.content[0].text.trim()
     .replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-  const parsed = JSON.parse(text);
+  const arrayMatch = text.match(/\[[\s\S]*\]/);
+  if (!arrayMatch) throw new Error(`Claude returned non-JSON: "${text.slice(0, 120)}"`);
+  const parsed = JSON.parse(arrayMatch[0]);
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
@@ -283,6 +285,17 @@ async function processEmail(messageId) {
 
       // Gmail API uses base64url — convert to standard base64
       const base64 = (attRes.data.data || "").replace(/-/g, "+").replace(/_/g, "/");
+
+      // Claude's image limit is 5 MB decoded (~6.7 MB base64)
+      const MAX_B64 = 6_700_000;
+      if (base64.length > MAX_B64) {
+        const sizeMB = (base64.length * 0.75 / 1e6).toFixed(1);
+        console.warn(`[WQMS] Skipping ${att.filename}: too large (${sizeMB} MB, limit 5 MB)`);
+        await supabase.from("cert_inbox")
+          .update({ processing_error: `Attachment too large: ${sizeMB} MB (limit 5 MB)` })
+          .eq("id", inboxRow.id);
+        continue;
+      }
 
       console.log(`[WQMS] Extracting: ${att.filename} (${att.mimeType})`);
       const certs = await extractCertData(base64, att.mimeType);
