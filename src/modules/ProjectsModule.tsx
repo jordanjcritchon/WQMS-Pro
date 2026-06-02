@@ -10,9 +10,10 @@ import { useStore } from "../store";
 import * as db from "../lib/db";
 import { AddProjectModal } from "../components/AddProjectModal";
 import { DrawingViewer } from "../components/DrawingViewer";
+import { WeldMapModule } from "./WeldMapModule";
 import type { Project, ProjectDrawing } from "../types";
 
-const TABS = ["Overview", "Welds", "Quality", "ITP", "Materials", "Drawings"] as const;
+const TABS = ["Overview", "Welds", "Quality", "ITP", "Materials", "Drawings", "Weld Map"] as const;
 type Tab = typeof TABS[number];
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -685,21 +686,27 @@ export const ProjectsModule: React.FC = () => {
           </div>
         </div>
 
-        {/* Tab content */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-          {tab === "Overview"   && <OverviewTab   p={sel} />}
-          {tab === "Welds"      && <WeldsTab      p={sel} />}
-          {tab === "Quality"    && <QualityTab    p={sel} />}
-          {tab === "ITP"        && <ITPTab        p={sel} />}
-          {tab === "Materials"  && <MaterialsTab  p={sel} />}
-          {tab === "Drawings"   && (
-            <DrawingsTab
-              project={sel}
-              onUpdate={handleDrawingsUpdate}
-              onView={d => setViewDrawing(d)}
-            />
-          )}
-        </div>
+        {/* Tab content — Weld Map fills full space with no padding */}
+        {tab === "Weld Map" ? (
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <WeldMapModule projectId={sel.id} />
+          </div>
+        ) : (
+          <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+            {tab === "Overview"   && <OverviewTab   p={sel} />}
+            {tab === "Welds"      && <WeldsTab      p={sel} />}
+            {tab === "Quality"    && <QualityTab    p={sel} />}
+            {tab === "ITP"        && <ITPTab        p={sel} />}
+            {tab === "Materials"  && <MaterialsTab  p={sel} />}
+            {tab === "Drawings"   && (
+              <DrawingsTab
+                project={sel}
+                onUpdate={handleDrawingsUpdate}
+                onView={d => setViewDrawing(d)}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Modals */}

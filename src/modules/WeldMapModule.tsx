@@ -3,6 +3,7 @@ import * as pdfjs from "pdfjs-dist";
 import { D, inp } from "../theme";
 import { WELD_MAP_NODES, PROJECTS, WELD_PASSPORTS } from "../data";
 import { WELD_STATUS_COLORS } from "../statusMeta";
+import { useStore } from "../store";
 import type { WeldMapNode } from "../types";
 
 // Set PDF.js worker
@@ -15,6 +16,7 @@ interface WeldMapModuleProps {
   openPassport?: (id: string) => void;
   openNCR?:      (weldId: string, project: string) => void;
   openVT?:       (weldId: string, project: string) => void;
+  projectId?:    string; // when set, lock to this project (embedded in Projects tab)
 }
 
 interface Transform { scale: number; x: number; y: number; }
@@ -148,23 +150,27 @@ const StructuralSVG: React.FC<{ project?: typeof PROJECTS[0] }> = ({ project }) 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const CUSTOM_NODES_KEY = "wqms_weld_map_custom_nodes";
-
-function loadCustomNodes(): WeldMapNode[] {
-  try { return JSON.parse(localStorage.getItem(CUSTOM_NODES_KEY) || "[]"); } catch { return []; }
+function nodesKey(projectId: string) { return `wqms_weld_map_nodes_${projectId}`; }
+function loadCustomNodes(projectId: string): WeldMapNode[] {
+  try { return JSON.parse(localStorage.getItem(nodesKey(projectId)) || "[]"); } catch { return []; }
 }
-function saveCustomNodes(nodes: WeldMapNode[]) {
-  try { localStorage.setItem(CUSTOM_NODES_KEY, JSON.stringify(nodes)); } catch {}
+function saveCustomNodes(nodes: WeldMapNode[], projectId: string) {
+  try { localStorage.setItem(nodesKey(projectId), JSON.stringify(nodes)); } catch {}
 }
 
 // ── Main module ───────────────────────────────────────────────────────────────
 
-export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, openNCR, openVT }) => {
+export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, openNCR, openVT, projectId: lockedProjectId }) => {
+  const { projects: storeProjects } = useStore();
+  // Merge store projects with static fallback so new projects always appear
+  const allProjects = storeProjects.length > 0 ? storeProjects : PROJECTS;
+  const defaultId   = lockedProjectId ?? allProjects[0]?.id ?? "PRJ-001";
+
   const [selectedNode,    setSelectedNode]    = useState<WeldMapNode | null>(null);
   const [filterStatus,    setFilterStatus]    = useState("All");
   const [filterWelder,    setFilterWelder]    = useState("All");
   const [hoveredNode,     setHoveredNode]     = useState<string | null>(null);
-  const [selectedProject, setSelectedProject] = useState("PRJ-001");
+  const [selectedProject, setSelectedProject] = useState(defaultId);
   const [transform,       setTransform]       = useState<Transform>({ scale: 1, x: 0, y: 0 });
 
   // Drawing upload state
@@ -173,7 +179,18 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
   const [pdfRendering, setPdfRendering] = useState(false);
   const [placeMode,    setPlaceMode]    = useState(false);
   const [placeForm,    setPlaceForm]    = useState<PlaceForm | null>(null);
-  const [customNodes,  setCustomNodes]  = useState<WeldMapNode[]>(loadCustomNodes);
+  const [customNodes,  setCustomNodes]  = useState<WeldMapNode[]>(() => loadCustomNodes(defaultId));
+
+  // When the locked project changes (parent navigates), sync selected project
+  useEffect(() => {
+    if (lockedProjectId && lockedProjectId !== selectedProject) {
+      setSelectedProject(lockedProjectId);
+      setCustomNodes(loadCustomNodes(lockedProjectId));
+      setSelectedNode(null);
+      resetView();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lockedProjectId]);
 
   const mapRef       = useRef<HTMLDivElement>(null);
   const uploadRef    = useRef<HTMLInputElement>(null);
@@ -263,7 +280,7 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
     };
     const updated = [...customNodes, node];
     setCustomNodes(updated);
-    saveCustomNodes(updated);
+    saveCustomNodes(updated, selectedProject);
     setPlaceForm(null);
     setPlaceMode(false);
     setSelectedNode(node);
@@ -272,7 +289,7 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
   const removeCustomNode = (id: string) => {
     const updated = customNodes.filter(n => n.id !== id);
     setCustomNodes(updated);
-    saveCustomNodes(updated);
+    saveCustomNodes(updated, selectedProject);
     if (selectedNode?.id === id) setSelectedNode(null);
   };
 
@@ -332,13 +349,13 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
   });
 
   const passport  = selectedNode ? WELD_PASSPORTS.find(w => w.id === selectedNode.id) : null;
-  const project   = PROJECTS.find(p => p.id === selectedProject);
+  const project   = allProjects.find(p => p.id === selectedProject);
   const sType     = schType(project?.name, project?.standard);
   const isCustom  = selectedNode ? customNodes.some(n => n.id === selectedNode.id) : false;
 
   const nodeProject = (node: WeldMapNode) => {
     const p = WELD_PASSPORTS.find(w => w.id === node.id);
-    if (p) return PROJECTS.find(pr => pr.id === p.projectId)?.name ?? p.projectId;
+    if (p) return allProjects.find(pr => pr.id === p.projectId)?.name ?? p.projectId;
     return project?.name ?? selectedProject;
   };
 
@@ -360,9 +377,20 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
 
       {/* ── Filter / toolbar bar ── */}
       <div style={{ padding: "8px 14px", background: D.surface, borderBottom: `1px solid ${D.border}`, display: "flex", alignItems: "center", gap: 10, flexShrink: 0, flexWrap: "wrap" }}>
-        <select value={selectedProject} onChange={e => { setSelectedProject(e.target.value); setSelectedNode(null); resetView(); }} style={{ ...inp, width: 234 }}>
-          {PROJECTS.map(p => <option key={p.id} value={p.id}>{p.id} – {p.name}</option>)}
-        </select>
+        {!lockedProjectId && (
+          <select value={selectedProject} onChange={e => {
+            setSelectedProject(e.target.value);
+            setCustomNodes(loadCustomNodes(e.target.value));
+            setSelectedNode(null); resetView();
+          }} style={{ ...inp, width: 234 }}>
+            {allProjects.map(p => <option key={p.id} value={p.id}>{p.id} – {p.name}</option>)}
+          </select>
+        )}
+        {lockedProjectId && (
+          <div style={{ fontWeight: 700, fontSize: 13, color: D.text, padding: "4px 0" }}>
+            {project?.name ?? lockedProjectId}
+          </div>
+        )}
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...inp, width: 160 }}>
           <option value="All">All Statuses</option>
           {STATUSES.map(s => <option key={s}>{s}</option>)}
