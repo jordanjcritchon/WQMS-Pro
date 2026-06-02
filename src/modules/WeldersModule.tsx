@@ -14,6 +14,7 @@ export const WeldersModule: React.FC = () => {
   const [tab,        setTab]        = useState("register");
   const [search,     setSearch]     = useState("");
   const [showAdd,    setShowAdd]    = useState(false);
+  const [editWelder, setEditWelder] = useState<Welder | null>(null);
   const [exporting,  setExporting]  = useState<string | null>(null);
 
   const alerts = welderData.flatMap(w =>
@@ -29,14 +30,24 @@ export const WeldersModule: React.FC = () => {
     return !s || `${w.firstName} ${w.lastName} ${w.stampNo} ${w.employer}`.toLowerCase().includes(s);
   });
 
-  const handleSaveWelder = async (welder: Welder, photoFile: File | null) => {
-    let photoUrl: string | undefined;
-    if (photoFile) {
-      photoUrl = await db.uploadWelderPhoto(welder.id, photoFile);
-    }
+  const handleSaveWelder = async (welder: Welder, photoFile: File | null, removedQualIds: string[]) => {
+    let photoUrl = welder.photoUrl;
+    if (photoFile) photoUrl = await db.uploadWelderPhoto(welder.id, photoFile);
     const welderWithPhoto = { ...welder, photoUrl };
+    if (removedQualIds.length) await db.deleteQualifications(removedQualIds);
     await db.upsertWelder(welderWithPhoto);
     setWelderData(prev => [...prev, welderWithPhoto]);
+    await refresh();
+  };
+
+  const handleEditWelder = async (welder: Welder, photoFile: File | null, removedQualIds: string[]) => {
+    let photoUrl = welder.photoUrl;
+    if (photoFile) photoUrl = await db.uploadWelderPhoto(welder.id, photoFile);
+    const welderWithPhoto = { ...welder, photoUrl };
+    if (removedQualIds.length) await db.deleteQualifications(removedQualIds);
+    await db.upsertWelder(welderWithPhoto);
+    setWelderData(prev => prev.map(w => w.id === welderWithPhoto.id ? welderWithPhoto : w));
+    setSel(welderWithPhoto);
     await refresh();
   };
 
@@ -130,7 +141,10 @@ export const WeldersModule: React.FC = () => {
                     {sel.dateOfBirth && <div style={{ color: D.textSoft, fontSize: 11, marginTop: 2 }}>DOB: {sel.dateOfBirth}</div>}
                   </div>
                 </div>
-                <button onClick={() => setSel(null)} style={{ background: "none", border: `1px solid ${D.border}`, color: D.textMid, borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11, flexShrink: 0 }}>✕</button>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => setSel(null)} style={{ background: "none", border: `1px solid ${D.border}`, color: D.textMid, borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11 }}>✕</button>
+                  <button onClick={() => setEditWelder(sel)} style={{ background: "#2a4a9a", border: "none", color: "#fff", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>✏ Edit</button>
+                </div>
               </div>
 
               <SectionHeader icon="🏅">Qualifications</SectionHeader>
@@ -236,11 +250,14 @@ export const WeldersModule: React.FC = () => {
         </div>
       )}
 
-      {/* Add Welder Modal */}
       {showAdd && (
+        <AddWelderModal onClose={() => setShowAdd(false)} onSave={handleSaveWelder} />
+      )}
+      {editWelder && (
         <AddWelderModal
-          onClose={() => setShowAdd(false)}
-          onSave={handleSaveWelder}
+          onClose={() => setEditWelder(null)}
+          onSave={handleEditWelder}
+          initialWelder={editWelder}
         />
       )}
     </div>

@@ -121,6 +121,12 @@ export async function upsertWelder(w: Welder): Promise<void> {
   }
 }
 
+export async function deleteQualifications(ids: string[]): Promise<void> {
+  if (!supabase || ids.length === 0) return;
+  const { error } = await supabase.from("welder_qualifications").delete().in("id", ids);
+  if (error) throw error;
+}
+
 export async function uploadWelderPhoto(welderId: string, file: File): Promise<string> {
   if (!supabase) throw new Error("Supabase not configured");
   const ext  = file.name.split(".").pop() ?? "jpg";

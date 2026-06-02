@@ -255,19 +255,28 @@ export async function generateQualCertPDF(welder: Welder, q: WelderQualification
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-interface Props { onClose: () => void; onSave: (welder: Welder, photoFile: File | null) => Promise<void>; }
+interface Props {
+  onClose:        () => void;
+  onSave:         (welder: Welder, photoFile: File | null, removedQualIds: string[]) => Promise<void>;
+  initialWelder?: Welder;
+}
 
-export const AddWelderModal: React.FC<Props> = ({ onClose, onSave }) => {
-  const [firstName,    setFirstName]    = useState("");
-  const [lastName,     setLastName]     = useState("");
-  const [dateOfBirth,  setDateOfBirth]  = useState("");
-  const [birthplace,   setBirthplace]   = useState("");
-  const [stampNo,      setStampNo]      = useState("");
-  const [employer,     setEmployer]     = useState("");
-  const [trade,        setTrade]        = useState("Welder");
+export const AddWelderModal: React.FC<Props> = ({ onClose, onSave, initialWelder }) => {
+  const editing = !!initialWelder;
+
+  const [firstName,    setFirstName]    = useState(initialWelder?.firstName    ?? "");
+  const [lastName,     setLastName]     = useState(initialWelder?.lastName     ?? "");
+  const [dateOfBirth,  setDateOfBirth]  = useState(initialWelder?.dateOfBirth  ?? "");
+  const [birthplace,   setBirthplace]   = useState(initialWelder?.birthplace   ?? "");
+  const [stampNo,      setStampNo]      = useState(initialWelder?.stampNo      ?? "");
+  const [employer,     setEmployer]     = useState(initialWelder?.employer     ?? "");
+  const [trade,        setTrade]        = useState(initialWelder?.trade        ?? "Welder");
   const [photoFile,    setPhotoFile]    = useState<File | null>(null);
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [quals,        setQuals]        = useState<Partial<WelderQualification>[]>([blankQual()]);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(initialWelder?.photoUrl ?? null);
+  const [quals,        setQuals]        = useState<Partial<WelderQualification>[]>(
+    initialWelder?.qualifications.length ? initialWelder.qualifications : [blankQual()]
+  );
+  const [removedQualIds, setRemovedQualIds] = useState<string[]>([]);
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState<string | null>(null);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -292,7 +301,7 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave }) => {
     if (!firstName.trim() || !lastName.trim() || !stampNo.trim()) {
       setError("First name, last name and stamp number are required."); return;
     }
-    const id      = crypto.randomUUID();
+    const id       = initialWelder?.id ?? crypto.randomUUID();
     const allDates = quals.map(q => q.expiryDate).filter(Boolean) as string[];
     const minDays  = allDates.length ? Math.min(...allDates.map(d => Math.floor((new Date(d).getTime() - Date.now()) / 86400000))) : 365;
     const status: Welder["status"] = minDays < 0 ? "Expired" : minDays < 90 ? "Expiring Soon" : "Current";
@@ -300,10 +309,11 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave }) => {
       id, stampNo: stampNo.trim(), firstName: firstName.trim(), lastName: lastName.trim(),
       dateOfBirth: dateOfBirth || undefined, birthplace: birthplace || undefined,
       employer: employer.trim(), trade: trade.trim(), status,
+      photoUrl: initialWelder?.photoUrl,
       qualifications: quals.map(q => ({ ...blankQual(), ...q, id: q.id ?? crypto.randomUUID() }) as WelderQualification),
     };
     setSaving(true); setError(null);
-    try { await onSave(welder, photoFile); onClose(); }
+    try { await onSave(welder, photoFile, removedQualIds); onClose(); }
     catch (e: unknown) { setError((e as Error).message); }
     finally { setSaving(false); }
   };
@@ -321,7 +331,7 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave }) => {
         {/* Header */}
         <div style={{ background: D.surface, borderBottom: `1px solid ${D.border}`, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
           <div>
-            <div style={{ color: D.text, fontWeight: 700, fontSize: 16 }}>Add Welder</div>
+            <div style={{ color: D.text, fontWeight: 700, fontSize: 16 }}>{editing ? "Edit Welder" : "Add Welder"}</div>
             <div style={{ color: D.textSoft, fontSize: 12 }}>ISO 9606-1 Qualification Record</div>
           </div>
           <button onClick={onClose} style={S.smallBtn}>✕ Cancel</button>
@@ -376,7 +386,13 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave }) => {
                   <div style={{ color: D.text, fontWeight: 700, fontSize: 13 }}>
                     Qualification {i + 1}{q.process ? ` — ${q.process.split(" ")[0]}` : ""}
                   </div>
-                  {quals.length > 1 && <button style={S.smallBtn} onClick={() => setQuals(qs => qs.filter((_, idx) => idx !== i))}>Remove</button>}
+                  {quals.length > 1 && (
+                    <button style={S.smallBtn} onClick={() => {
+                      const removed = quals[i];
+                      if (removed?.id) setRemovedQualIds(ids => [...ids, removed.id!]);
+                      setQuals(qs => qs.filter((_, idx) => idx !== i));
+                    }}>Remove</button>
+                  )}
                 </div>
 
                 <div style={{ ...S.grid3, marginBottom: 12 }}>
@@ -503,7 +519,7 @@ export const AddWelderModal: React.FC<Props> = ({ onClose, onSave }) => {
         <div style={{ borderTop: `1px solid ${D.border}`, padding: "12px 20px", display: "flex", gap: 10, justifyContent: "flex-end", background: D.surface, flexShrink: 0 }}>
           <button style={S.smallBtn} onClick={onClose}>Cancel</button>
           <button style={btn(saving ? D.textSoft : "#2a4a9a")} onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : "Save Welder"}
+            {saving ? "Saving…" : editing ? "Save Changes" : "Save Welder"}
           </button>
         </div>
       </div>
