@@ -278,13 +278,19 @@ async function processEmail(messageId) {
 
   for (const att of attParts) {
     try {
-      console.log(`[WQMS] Downloading: ${att.filename}`);
+      console.log(`[WQMS] Downloading: ${att.filename} (attachmentId: ${att.attachmentId?.slice(0,20)}…)`);
       const attRes = await gmail.users.messages.attachments.get({
         userId: "me", messageId, id: att.attachmentId,
       });
 
       // Gmail API uses base64url — convert to standard base64
       const base64 = (attRes.data.data || "").replace(/-/g, "+").replace(/_/g, "/");
+      console.log(`[WQMS] Downloaded ${att.filename}: ${(base64.length * 0.75 / 1024).toFixed(0)} KB`);
+
+      if (!base64) {
+        console.warn(`[WQMS] Skipping ${att.filename}: empty attachment data from Gmail API`);
+        continue;
+      }
 
       // Claude's image limit is 5 MB decoded (~6.7 MB base64)
       const MAX_B64 = 6_700_000;
@@ -326,6 +332,7 @@ async function processEmail(messageId) {
       await supabase.from("cert_inbox")
         .update({ processing_error: e.message }).eq("id", inboxRow.id);
     }
+    await new Promise(r => setTimeout(r, 500)); // avoid Gmail API rate limiting on multi-attachment emails
   }
 }
 
