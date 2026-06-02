@@ -292,6 +292,13 @@ async function processEmail(messageId) {
         continue;
       }
 
+      // Skip tiny images — they're inline logos/signatures, not cert documents
+      const sizeKB = base64.length * 0.75 / 1024;
+      if (att.mimeType.startsWith("image/") && sizeKB < 15) {
+        console.log(`[WQMS] Skipping ${att.filename}: ${sizeKB.toFixed(0)} KB inline image (not a cert)`);
+        continue;
+      }
+
       // Claude's image limit is 5 MB decoded (~6.7 MB base64)
       const MAX_B64 = 6_700_000;
       if (base64.length > MAX_B64) {
