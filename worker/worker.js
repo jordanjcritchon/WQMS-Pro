@@ -1,41 +1,39 @@
-/**
- * WQMS Pro — Gmail Cert Inbox Worker (IMAP)
- *
- * Polls wqmscerts@gmail.com every 2 minutes via IMAP.
- * For each new unread email with attachments:
- *   1. Downloads the PDF/image attachment
- *   2. Sends to Claude for classification + data extraction
- *   3. Saves structured data to the correct Supabase register
- *   4. Stores the PDF in Supabase Storage
- *   5. Marks the email as read
- */
-
 import "dotenv/config";
-import { ImapFlow } from "imapflow";
+import { google }   from "googleapis";
 import Anthropic    from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// ── Env validation ────────────────────────────────────────────────────────────
 
-const CERT_EMAIL = process.env.CERT_EMAIL || "wqmscerts@gmail.com";
-const APP_PASS   = process.env.GMAIL_APP_PASSWORD;
-
-if (!APP_PASS) {
-  console.error("[WQMS] FATAL: GMAIL_APP_PASSWORD environment variable is not set");
-  process.exit(1);
+const REQUIRED = [
+  "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN",
+  "SUPABASE_URL", "SUPABASE_SERVICE_KEY",
+];
+for (const key of REQUIRED) {
+  if (!process.env[key]) {
+    console.error(`[WQMS] FATAL: ${key} is not set`);
+    process.exit(1);
+  }
 }
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+const CERT_EMAIL = process.env.CERT_EMAIL || "wqmscerts@gmail.com";
+const POLL_MS    = 5 * 60 * 1000; // poll every 5 minutes
+
+// ── Clients ───────────────────────────────────────────────────────────────────
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET
 );
+oauth2Client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const gmail     = google.gmail({ version: "v1", auth: oauth2Client });
+const supabase  = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
 
-const SUPPORTED_TYPES = [
-  "application/pdf",
-  "image/jpeg", "image/jpg", "image/png",
-];
+const SUPPORTED_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
 
 // ── Claude extraction ─────────────────────────────────────────────────────────
 
@@ -76,7 +74,7 @@ const CERT_SCHEMA = `{
 }`;
 
 async function extractCertData(base64Data, mimeType) {
-  // Normalise non-standard MIME types Claude doesn't accept
+  if (!anthropic) throw new Error("ANTHROPIC_API_KEY not set — skipping extraction");
   const safeMime = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
 
   const contentBlock = safeMime === "application/pdf"
@@ -84,7 +82,7 @@ async function extractCertData(base64Data, mimeType) {
     : { type: "image",    source: { type: "base64", media_type: safeMime,          data: base64Data } };
 
   const msg = await anthropic.messages.create({
-    model:      "claude-opus-4-7",
+    model:      "claude-opus-4-8",
     max_tokens: 8192,
     messages: [{
       role:    "user",
@@ -120,26 +118,25 @@ For NDT result use PASS or FAIL only.` },
   const text = msg.content[0].text.trim()
     .replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
   const parsed = JSON.parse(text);
-  // Always return an array
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
 // ── Supabase Storage upload ───────────────────────────────────────────────────
 
-async function uploadToStorage(bucket, path, base64Data, mimeType) {
+async function uploadToStorage(bucket, storagePath, base64Data, mimeType) {
   const buffer = Buffer.from(base64Data, "base64");
   const { error } = await supabase.storage
     .from(bucket)
-    .upload(path, buffer, { contentType: mimeType, upsert: true });
+    .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
   if (error) throw error;
-  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
   return data.publicUrl;
 }
 
 // ── Save to correct Supabase register ────────────────────────────────────────
 
 async function saveToRegister(inboxId, extracted, docPath, docUrl) {
-  const t = extracted.cert_type;
+  const t    = extracted.cert_type;
   const base = { inbox_id: inboxId, document_path: docPath, document_url: docUrl, raw_extracted: extracted };
 
   if (t === "material") {
@@ -153,9 +150,9 @@ async function saveToRegister(inboxId, extracted, docPath, docUrl) {
   } else if (t === "consumable") {
     await supabase.from("consumable_cert_register").insert({
       ...base,
-      cert_ref: extracted.cert_ref,     classification: extracted.classification,
+      cert_ref: extracted.cert_ref,         classification: extracted.classification,
       manufacturer: extracted.manufacturer, batch_no: extracted.batch_no,
-      standard: extracted.standard,     test_date: extracted.test_date,
+      standard: extracted.standard,         test_date: extracted.test_date,
     });
   } else if (t === "ndt") {
     await supabase.from("ndt_report_register").insert({
@@ -170,303 +167,191 @@ async function saveToRegister(inboxId, extracted, docPath, docUrl) {
     await supabase.from("ht_report_register").insert({
       ...base,
       report_no: extracted.report_no || extracted.cert_ref,
-      ht_type: extracted.ht_type,       component_id: extracted.component_id,
-      weld_id: extracted.weld_id,       material: extracted.material,
+      ht_type: extracted.ht_type,         component_id: extracted.component_id,
+      weld_id: extracted.weld_id,         material: extracted.material,
       target_temp: extracted.target_temp, soak_time: extracted.soak_time,
       actual_temp: extracted.actual_temp, result: extracted.result,
-      test_date: extracted.test_date,   technician: extracted.technician,
+      test_date: extracted.test_date,     technician: extracted.technician,
     });
   } else if (t === "welder_qual") {
     await supabase.from("welder_cert_register").insert({
       ...base,
       cert_no: extracted.cert_no || extracted.cert_ref,
-      welder_name: extracted.welder_name, stamp_no: extracted.stamp_no,
-      standard: extracted.standard,       process: extracted.process,
+      welder_name: extracted.welder_name,       stamp_no: extracted.stamp_no,
+      standard: extracted.standard,             process: extracted.process,
       material_group: extracted.material_group, positions: extracted.positions || [],
-      test_date: extracted.test_date,     expiry_date: extracted.expiry_date,
+      test_date: extracted.test_date,           expiry_date: extracted.expiry_date,
       test_lab: extracted.test_lab,
     });
   }
   // wps / other: stored in cert_inbox only
 }
 
+// ── Walk Gmail message payload to find attachments ────────────────────────────
+
+function collectAttachments(payload, out = []) {
+  if (payload.body?.attachmentId && payload.filename) {
+    out.push({
+      filename:     payload.filename,
+      mimeType:     payload.mimeType,
+      attachmentId: payload.body.attachmentId,
+    });
+  }
+  for (const part of payload.parts || []) collectAttachments(part, out);
+  return out;
+}
+
+// ── Mark a message as read ────────────────────────────────────────────────────
+
+async function markAsRead(messageId) {
+  try {
+    await gmail.users.messages.modify({
+      userId: "me", id: messageId,
+      requestBody: { removeLabelIds: ["UNREAD"] },
+    });
+  } catch (e) {
+    console.warn(`[WQMS] Could not mark ${messageId} as read:`, e.message);
+  }
+}
+
 // ── Process one email ─────────────────────────────────────────────────────────
 
-async function processEmail(client, uid) {
-  const msg = await client.fetchOne(uid, {
-    source:    true,
-    envelope:  true,
-    bodyParts: true,
-  }, { uid: true });
+async function processEmail(messageId) {
+  // Skip if already in cert_inbox (handles partial failures from previous runs)
+  const { data: existing } = await supabase
+    .from("cert_inbox").select("id")
+    .eq("gmail_message_id", messageId).maybeSingle();
 
-  if (!msg) return;
+  if (existing) {
+    await markAsRead(messageId);
+    return;
+  }
 
-  const env     = msg.envelope;
-  const from    = env.from?.[0] || {};
-  const fromEmail = from.address || "";
-  const fromName  = from.name   || "";
-  const subject   = env.subject || "";
-  const receivedAt = env.date?.toISOString() || new Date().toISOString();
+  const msg     = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
+  const headers = msg.data.payload.headers || [];
+  const subject = headers.find(h => h.name === "Subject")?.value || "";
+  const from    = headers.find(h => h.name === "From")?.value    || "";
+  const date    = headers.find(h => h.name === "Date")?.value    || "";
+
+  const fromMatch = from.match(/^(.+?)\s*<([^>]+)>$/);
+  const fromEmail = fromMatch ? fromMatch[2].trim() : from.trim();
+  const fromName  = fromMatch ? fromMatch[1].trim() : "";
 
   console.log(`[WQMS] Email: "${subject}" from ${fromEmail}`);
 
-  // Fetch full message to get attachments
-  const data = await client.download(uid, undefined, { uid: true });
-  if (!data) return;
+  const attParts = collectAttachments(msg.data.payload)
+    .filter(a => SUPPORTED_TYPES.includes(a.mimeType));
 
-  // Parse MIME parts
-  const chunks = [];
-  for await (const chunk of data.content) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString("binary");
-
-  // Extract attachments from raw MIME
-  const attachments = parseMimeAttachments(raw);
-
-  // Record in cert_inbox
   const { data: inboxRow, error: inboxErr } = await supabase
     .from("cert_inbox")
     .insert({
-      gmail_message_id: String(uid),
+      gmail_message_id: messageId,
       from_email:       fromEmail,
       from_name:        fromName,
-      subject:          subject,
-      received_at:      receivedAt,
-      attachment_count: attachments.length,
+      subject,
+      received_at:      date ? new Date(date).toISOString() : new Date().toISOString(),
+      attachment_count: attParts.length,
     })
-    .select()
-    .single();
+    .select().single();
 
   if (inboxErr) {
-    if (inboxErr.code === "23505") {
-      console.log(`[WQMS] Already recorded uid ${uid} — marking read`);
-      try { await client.messageFlagsAdd([uid], ["\\Seen"], { uid: true }); } catch {}
-      return;
-    }
+    if (inboxErr.code === "23505") { await markAsRead(messageId); return; }
     console.error("[WQMS] inbox insert error:", inboxErr.message);
     return;
   }
 
-  // Mark as read immediately after recording — prevents infinite loops if extraction fails
-  try {
-    await client.messageFlagsAdd([uid], ["\\Seen"], { uid: true });
-  } catch (e) {
-    console.warn(`[WQMS] Could not mark uid ${uid} as read:`, e.message);
+  // Mark as read immediately — prevents reprocessing if extraction crashes
+  await markAsRead(messageId);
+
+  if (attParts.length === 0) {
+    console.log(`[WQMS] No supported attachments in "${subject}"`);
+    return;
   }
 
-  for (const att of attachments) {
-    if (!SUPPORTED_TYPES.includes(att.mimeType)) continue;
+  const bucketMap = {
+    material: "certs-material", consumable: "certs-consumable",
+    ndt: "certs-ndt", heat_treatment: "certs-ht",
+    welder_qual: "certs-welder", wps: "wps-documents",
+  };
 
+  for (const att of attParts) {
     try {
+      console.log(`[WQMS] Downloading: ${att.filename}`);
+      const attRes = await gmail.users.messages.attachments.get({
+        userId: "me", messageId, id: att.attachmentId,
+      });
+
+      // Gmail API uses base64url — convert to standard base64
+      const base64 = (attRes.data.data || "").replace(/-/g, "+").replace(/_/g, "/");
+
       console.log(`[WQMS] Extracting: ${att.filename} (${att.mimeType})`);
-      const certs = await extractCertData(att.base64, att.mimeType);
+      const certs = await extractCertData(base64, att.mimeType);
       console.log(`[WQMS] Found ${certs.length} cert(s) in ${att.filename}`);
 
-      const bucketMap = {
-        material: "certs-material", consumable: "certs-consumable",
-        ndt: "certs-ndt", heat_treatment: "certs-ht",
-        welder_qual: "certs-welder", wps: "wps-documents",
-      };
-
-      // Upload the PDF once, reuse URL for all certs found inside it
       const safeName    = att.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const storagePath = `${new Date().toISOString().slice(0,10)}/${inboxRow.id}/${safeName}`;
+      const storagePath = `${new Date().toISOString().slice(0, 10)}/${inboxRow.id}/${safeName}`;
       let docUrl = "";
       try {
-        const firstBucket = bucketMap[certs[0]?.cert_type] || "certs-material";
-        docUrl = await uploadToStorage(firstBucket, storagePath, att.base64, att.mimeType);
+        const bucket = bucketMap[certs[0]?.cert_type] || "certs-material";
+        docUrl = await uploadToStorage(bucket, storagePath, base64, att.mimeType);
       } catch (e) {
         console.warn("[WQMS] Storage upload failed:", e.message);
       }
 
-      // Save each extracted cert to its register
       for (let i = 0; i < certs.length; i++) {
-        const extracted = certs[i];
-        console.log(`[WQMS] Saving cert ${i + 1}/${certs.length}: ${extracted.cert_type}`);
-        await saveToRegister(inboxRow.id, extracted, storagePath, docUrl);
+        console.log(`[WQMS] Saving cert ${i + 1}/${certs.length}: ${certs[i].cert_type}`);
+        await saveToRegister(inboxRow.id, certs[i], storagePath, docUrl);
       }
 
       const certTypes = [...new Set(certs.map(c => c.cert_type))].join(", ");
       await supabase.from("cert_inbox")
-        .update({ extracted: true, cert_type: certTypes })
-        .eq("id", inboxRow.id);
+        .update({ extracted: true, cert_type: certTypes }).eq("id", inboxRow.id);
 
       console.log(`[WQMS] ✓ ${att.filename} → ${certs.length} cert(s): ${certTypes}`);
-
     } catch (e) {
       console.error(`[WQMS] Failed on ${att.filename}:`, e.message);
       await supabase.from("cert_inbox")
-        .update({ processing_error: e.message })
-        .eq("id", inboxRow.id);
+        .update({ processing_error: e.message }).eq("id", inboxRow.id);
     }
-  }
-
-}
-
-// ── Simple MIME attachment parser ─────────────────────────────────────────────
-
-function parseMimeAttachments(raw) {
-  const attachments = [];
-  const boundaryMatch = raw.match(/boundary="?([^"\r\n;]+)"?/i);
-  if (!boundaryMatch) return attachments;
-
-  const boundary = "--" + boundaryMatch[1];
-  const parts    = raw.split(boundary);
-
-  for (const part of parts) {
-    const filenameMatch = part.match(/filename\*?=(?:UTF-8'')?["']?([^"'\r\n;]+)["']?/i);
-    const ctMatch       = part.match(/Content-Type:\s*([^\r\n;]+)/i);
-    const teMatch       = part.match(/Content-Transfer-Encoding:\s*(\S+)/i);
-
-    if (!filenameMatch || !ctMatch) continue;
-
-    const filename = decodeURIComponent(filenameMatch[1].trim());
-    const mimeType = ctMatch[1].trim().toLowerCase();
-    const encoding = (teMatch?.[1] || "").toLowerCase();
-
-    if (!SUPPORTED_TYPES.includes(mimeType)) continue;
-
-    // Find the body (after the double blank line)
-    const bodyStart = part.indexOf("\r\n\r\n");
-    if (bodyStart === -1) continue;
-
-    let body = part.slice(bodyStart + 4);
-    // Remove trailing boundary markers
-    const endIdx = body.indexOf("--");
-    if (endIdx !== -1) body = body.slice(0, endIdx);
-    body = body.trim();
-
-    if (encoding === "base64") {
-      const base64 = body.replace(/\s/g, "");
-      attachments.push({ filename, mimeType, base64 });
-    }
-  }
-
-  return attachments;
-}
-
-// ── IMAP IDLE worker (replaces polling) ──────────────────────────────────────
-// Uses a single persistent connection with IMAP IDLE so Gmail pushes
-// notifications instantly. Reconnects automatically with backoff on error.
-// This avoids the THROTTLED error caused by opening a new connection every 30s.
-
-function makeClient() {
-  return new ImapFlow({
-    host:   "imap.gmail.com",
-    port:   993,
-    secure: true,
-    auth: { user: CERT_EMAIL, pass: APP_PASS.replace(/\s/g, "") },
-    logger: false,
-    // Keep-alive to prevent connection drops
-    tls: { rejectUnauthorized: true },
-  });
-}
-
-async function fetchAndProcessUnseen(client) {
-  // Use sequence-number search (no { uid: true } option — that hangs on Gmail)
-  const seqNums = await client.search({ seen: false });
-  if (seqNums.length === 0) {
-    console.log("[WQMS] No new messages");
-    return;
-  }
-  console.log(`[WQMS] ${seqNums.length} unread message(s)`);
-
-  // Collect UIDs in one fetch pass
-  const uids = [];
-  for await (const msg of client.fetch(seqNums, { uid: true })) {
-    if (msg.uid) uids.push(msg.uid);
-  }
-
-  for (const uid of uids) {
-    try {
-      await processEmail(client, uid);
-    } catch (e) {
-      console.error(`[WQMS] Failed processing uid ${uid}:`, e.message);
-      // If connection dropped mid-process, throw so the outer loop reconnects
-      if (e.message.includes("not available") || e.message.includes("timeout")) throw e;
-    }
-    await new Promise(r => setTimeout(r, 1500));
   }
 }
 
-async function syncDeletions(client) {
-  // Get all current message UIDs in INBOX via sequence-based approach
-  const mbox = client.mailbox;
-  if (!mbox || mbox.exists === 0) {
-    // Inbox empty — remove all feed entries
-    const { data: stored } = await supabase.from("cert_inbox").select("id");
-    if (stored && stored.length > 0) {
-      await supabase.from("cert_inbox").delete().in("id", stored.map(r => r.id));
-      console.log(`[WQMS] Inbox empty — cleared ${stored.length} feed entry(ies)`);
+// ── Poll for unread emails ────────────────────────────────────────────────────
+
+async function pollOnce() {
+  try {
+    const res      = await gmail.users.messages.list({ userId: "me", q: "is:unread", maxResults: 20 });
+    const messages = res.data.messages || [];
+
+    if (messages.length === 0) { console.log("[WQMS] No new messages"); return; }
+
+    console.log(`[WQMS] ${messages.length} unread message(s)`);
+    for (const m of messages) {
+      await processEmail(m.id);
+      await new Promise(r => setTimeout(r, 1000));
     }
-    return;
+  } catch (e) {
+    console.error("[WQMS] Poll error:", e.message);
   }
+}
 
-  // Fetch all UIDs from current mailbox
-  const allUids = new Set();
-  for await (const msg of client.fetch("1:*", { uid: true })) {
-    allUids.add(String(msg.uid));
-  }
+// ── Sync deletions ────────────────────────────────────────────────────────────
 
-  const { data: stored } = await supabase.from("cert_inbox").select("id, gmail_message_id");
-  if (stored && stored.length > 0) {
-    const deleted = stored.filter(r => !allUids.has(r.gmail_message_id));
+async function syncDeletions() {
+  try {
+    const res        = await gmail.users.messages.list({ userId: "me", maxResults: 500 });
+    const currentIds = new Set((res.data.messages || []).map(m => m.id));
+
+    const { data: stored } = await supabase.from("cert_inbox").select("id, gmail_message_id");
+    if (!stored || stored.length === 0) return;
+
+    const deleted = stored.filter(r => !currentIds.has(r.gmail_message_id));
     if (deleted.length > 0) {
       await supabase.from("cert_inbox").delete().in("id", deleted.map(r => r.id));
       console.log(`[WQMS] Removed ${deleted.length} deleted email(s) from feed`);
     }
-  }
-}
-
-async function runIdleWorker() {
-  let backoff = 5000; // start 5s, doubles on each reconnect
-
-  while (true) {
-    try {
-    const client = makeClient();
-      console.log(`[WQMS] Connecting to ${CERT_EMAIL}…`);
-
-      // Timeout the connect attempt — Gmail throttle can cause indefinite hang
-      await Promise.race([
-        client.connect(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Connect timeout after 20s")), 20000)),
-      ]);
-      await client.mailboxOpen("INBOX");
-      console.log("[WQMS] Connected. Processing any pending messages…");
-      backoff = 5000; // reset backoff on successful connect
-
-      // Process any messages that arrived while we were disconnected
-      await fetchAndProcessUnseen(client);
-      await syncDeletions(client);
-
-      // Listen for new message notifications
-      client.on("exists", async ({ count, prevCount }) => {
-        if (count > prevCount) {
-          console.log(`[WQMS] New message detected (${count - prevCount} new)`);
-          try {
-            await fetchAndProcessUnseen(client);
-          } catch (e) {
-            console.error("[WQMS] Error processing new message:", e.message);
-          }
-        }
-      });
-
-      // IDLE — keeps connection open, Gmail pushes EXISTS when new mail arrives
-      // idle() resolves after ~29 min (Gmail's IDLE timeout), then we re-IDLE
-      console.log("[WQMS] Entering IDLE — waiting for new mail…");
-      while (true) {
-        await client.idle();
-        // idle() returned — either new mail, timeout, or error
-        // Re-sync deletions periodically when idle restarts
-        try { await syncDeletions(client); } catch {}
-        console.log("[WQMS] Re-entering IDLE…");
-      }
-
-    } catch (err) {
-      console.error(`[WQMS] Connection error: ${err.message} — reconnecting in ${backoff/1000}s`);
-      try { await client.logout(); } catch {}
-      await new Promise(r => setTimeout(r, backoff));
-      backoff = Math.min(backoff * 2, 5 * 60 * 1000); // cap at 5 min
-    }
+  } catch (e) {
+    console.error("[WQMS] syncDeletions error:", e.message);
   }
 }
 
@@ -476,7 +361,10 @@ console.log("╔═════════════════════�
 console.log("║  WQMS Pro — Gmail Cert Worker        ║");
 console.log("╠══════════════════════════════════════╣");
 console.log(`║  Inbox : ${CERT_EMAIL.padEnd(27)}║`);
-console.log("║  Mode  : IMAP IDLE (push)            ║");
+console.log("║  Mode  : Gmail API (HTTPS)           ║");
 console.log("╚══════════════════════════════════════╝\n");
 
-runIdleWorker();
+console.log(`[WQMS] Polling every 5 minutes via Gmail API`);
+await pollOnce();
+await syncDeletions();
+setInterval(async () => { await pollOnce(); await syncDeletions(); }, POLL_MS);
