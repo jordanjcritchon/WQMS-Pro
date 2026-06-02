@@ -49,11 +49,64 @@ const DatePicker: React.FC<DPProps> = ({ label, value, onChange }) => {
   );
 };
 
-const STANDARDS = [
-  "AS/NZS 1554.1", "AS/NZS 1554.5", "AS/NZS 1554.6",
-  "EN ISO 3834-2", "EN ISO 3834-3", "ASME IX",
-  "AWS D1.1", "AWS D1.2", "BS EN 1090-2", "ISO 9001:2015",
-];
+const STANDARDS: Record<string, string[]> = {
+  "Australian Standards — Structural": [
+    "AS/NZS 1554.1 — Cat GP (General Purpose)",
+    "AS/NZS 1554.1 — Cat SP (Structural Purpose)",
+    "AS/NZS 1554.2",
+    "AS/NZS 1554.3",
+    "AS/NZS 1554.4",
+    "AS/NZS 1554.5 — Stainless Steel",
+    "AS/NZS 1554.6 — Aluminium",
+    "AS/NZS 1554.7",
+    "BS EN 1090-2 — Structural Steel",
+  ],
+  "Australian Standards — Pressure Equipment": [
+    "AS 4041 — Cat 1 (Highest risk)",
+    "AS 4041 — Cat 2",
+    "AS 4041 — Cat 3",
+    "AS/NZS 3992 — Pressure Equipment Welding",
+    "AS 1210 — Pressure Vessels",
+    "AS 4037 — Pressure Equipment Examination",
+    "AS 2885.2 — Pipelines (Welding)",
+  ],
+  "ASME — Boiler & Pressure Vessel": [
+    "ASME BPVC Sec I — Power Boilers",
+    "ASME BPVC Sec VIII Div 1 — Pressure Vessels",
+    "ASME BPVC Sec VIII Div 2 — Pressure Vessels (Alt Rules)",
+    "ASME BPVC Sec IX — Welding Qualifications",
+  ],
+  "ASME — B31 Piping Codes": [
+    "ASME B31.1 — Power Piping",
+    "ASME B31.3 — Process Piping",
+    "ASME B31.4 — Liquid Pipelines",
+    "ASME B31.8 — Gas Transmission",
+    "ASME B31.9 — Building Services Piping",
+    "ASME B31.12 — Hydrogen Piping",
+  ],
+  "AWS Standards": [
+    "AWS D1.1 — Structural Steel",
+    "AWS D1.2 — Structural Aluminium",
+    "AWS D1.5 — Bridge Welding",
+    "AWS D1.6 — Structural Stainless Steel",
+    "AWS D9.1 — Sheet Metal",
+  ],
+  "European / ISO Standards": [
+    "EN ISO 3834-2 — Comprehensive Quality",
+    "EN ISO 3834-3 — Standard Quality",
+    "EN ISO 3834-4 — Elementary Quality",
+    "EN 13480 — Metallic Industrial Piping",
+    "EN 13445 — Unfired Pressure Vessels",
+    "EN 15614-1 — WPQR Steel",
+    "ISO 9001:2015 — Quality Management",
+  ],
+  "API Standards": [
+    "API 650 — Storage Tanks",
+    "API 620 — Large Welded Tanks",
+    "API 1104 — Pipeline Welding",
+    "API 582 — Welding Guidelines",
+  ],
+};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -122,7 +175,11 @@ export const AddProjectModal: React.FC<Props> = ({ onClose, onSave }) => {
               <label style={S.label}>Welding Standard</label>
               <select value={standard} onChange={e => setStandard(e.target.value)} style={S.sel}>
                 <option value="">— select —</option>
-                {STANDARDS.map(s => <option key={s} value={s}>{s}</option>)}
+                {Object.entries(STANDARDS).map(([group, items]) => (
+                  <optgroup key={group} label={group}>
+                    {items.map(s => <option key={s} value={s}>{s}</option>)}
+                  </optgroup>
+                ))}
               </select>
             </div>
           </div>
