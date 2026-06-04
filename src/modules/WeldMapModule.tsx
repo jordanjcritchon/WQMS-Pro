@@ -293,6 +293,13 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
     if (selectedNode?.id === id) setSelectedNode(null);
   };
 
+  const clearAllNodes = () => {
+    if (!window.confirm("Clear all weld nodes for this project? This cannot be undone.")) return;
+    setCustomNodes([]);
+    saveCustomNodes([], selectedProject);
+    setSelectedNode(null);
+  };
+
   // ── PDF / image upload ────────────────────────────────────────────────────
 
   const handleFileUpload = async (file: File) => {
@@ -341,7 +348,9 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
 
   // ── Derived data ─────────────────────────────────────────────────────────
 
-  const allNodes      = [...WELD_MAP_NODES, ...customNodes];
+  // Only show static demo nodes on the original legacy projects — new projects start blank
+  const isLegacyProject = PROJECTS.some(p => p.id === selectedProject);
+  const allNodes        = [...(isLegacyProject ? WELD_MAP_NODES : []), ...customNodes];
   const filteredNodes = allNodes.filter(n => {
     if (filterStatus !== "All" && n.status !== filterStatus) return false;
     if (filterWelder !== "All" && n.welder !== filterWelder) return false;
@@ -431,6 +440,14 @@ export const WeldMapModule: React.FC<WeldMapModuleProps> = ({ openPassport, open
           <div style={{ background: drawingMode === "drawing" ? D.accentFaint : D.surfaceAlt, border: `1px solid ${drawingMode === "drawing" ? D.accentBorder : D.border}`, color: drawingMode === "drawing" ? D.accent : D.textSoft, fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 4, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
             {drawingMode === "drawing" ? "📐 DRAWING" : (sType === "vessel" ? "⚙ VESSEL" : sType === "pipeline" ? "〰 PIPELINE" : "▦ STRUCTURAL")}
           </div>
+
+          {/* Clear all nodes for this project */}
+          {allNodes.length > 0 && (
+            <button onClick={clearAllNodes}
+              style={{ background: D.failBg, border: `1px solid ${D.failBorder}`, color: D.fail, borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+              🗑 Clear Map
+            </button>
+          )}
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
